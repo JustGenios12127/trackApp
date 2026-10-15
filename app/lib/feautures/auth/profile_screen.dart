@@ -138,6 +138,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 const TabHeader(title: 'Профиль'),
                 Expanded(
                   child: ListView(
+                    primary: false,
+                    physics: const ClampingScrollPhysics(),
                     padding: const EdgeInsets.fromLTRB(20, 28, 20, 28),
                     children: [
                       Center(child: _AvatarMark(letter: _letter(email))),

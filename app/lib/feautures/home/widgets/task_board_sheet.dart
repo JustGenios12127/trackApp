@@ -150,6 +150,8 @@ class _TaskBoardSheetState extends State<TaskBoardSheet> {
           const Divider(height: 1, color: AppColors.hairline),
           Expanded(
             child: ListView(
+              primary: false,
+              physics: const ClampingScrollPhysics(),
               padding: EdgeInsets.fromLTRB(20, 16, 20, 20 + bottom),
               children: [
                 Text(

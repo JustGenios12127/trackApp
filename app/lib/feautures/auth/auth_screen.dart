@@ -96,6 +96,8 @@ class _AuthScreenState extends State<AuthScreen> {
               child: LayoutBuilder(
                 builder: (context, constraints) {
                   return SingleChildScrollView(
+                    primary: false,
+                    physics: const ClampingScrollPhysics(),
                     padding: const EdgeInsets.fromLTRB(20, 28, 20, 24),
                     child: ConstrainedBox(
                       constraints: BoxConstraints(minHeight: constraints.maxHeight - 52),

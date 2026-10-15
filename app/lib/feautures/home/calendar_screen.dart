@@ -45,6 +45,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
               const TabHeader(title: 'Календарь'),
               Expanded(
                 child: ListView(
+                  primary: false,
+                  physics: const ClampingScrollPhysics(),
                   padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
                   children: [
                     ChatGlass(

@@ -263,7 +263,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             Expanded(
               child: ListView(
                 controller: _scroll,
-                physics: const BouncingScrollPhysics(),
+                primary: false,
+                physics: const ClampingScrollPhysics(),
                 padding: const EdgeInsets.only(top: 8, bottom: 12),
                 children: [
                   Padding(

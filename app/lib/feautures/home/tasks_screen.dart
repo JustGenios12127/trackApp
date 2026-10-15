@@ -76,6 +76,8 @@ class _TasksScreenState extends State<TasksScreen> {
               const TabHeader(title: 'Задачи'),
               Expanded(
                 child: ListView(
+                  primary: false,
+                  physics: const ClampingScrollPhysics(),
                   padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
                   children: [
                     ChatGlass(
