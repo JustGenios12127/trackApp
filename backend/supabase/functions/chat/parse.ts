@@ -12,14 +12,34 @@ export type TaskDraft = {
   remind_time?: string | null;
 };
 
+export type DeleteScope = "title" | "day" | "all" | "unclear";
+
+export type DeleteTarget = {
+  scope: DeleteScope;
+  title: string;
+  dated: boolean;
+  when: TaskDraft["when"];
+  weekday?: string;
+  week?: "upcoming" | "next";
+  date?: string;
+  month?: number;
+  day?: number;
+  days?: number;
+};
+
 export type TaskPlan = {
-  intent: "create" | "list" | "chat";
+  intent: "create" | "list" | "chat" | "delete";
   reply: string;
   tasks: TaskDraft[];
+  remove?: DeleteTarget;
 };
 
 const weekdayPattern =
   "понедельник|вторник|сред[уа]|четверг|пятниц[ау]|суббот[уа]|воскресенье";
+
+const deleteVerb =
+  "удал(?:ите|ить|и)|убер(?:ите|и|ать)|сотр(?:ите|и)|стереть|отмен(?:ите|ить|и)";
+const createVerb = "запиши|поставь|добавь|создай|напомни(?:ть)?";
 
 export function fallbackPlan(text: string): TaskPlan | null {
   const raw = text.trim();
@@ -27,7 +47,10 @@ export function fallbackPlan(text: string): TaskPlan | null {
   if (isListRequest(lower)) {
     return { intent: "list", reply: "", tasks: [] };
   }
-  if (!/(запиши|поставь|добавь|создай|напомни)/.test(lower)) return null;
+  if (asksToDelete(lower)) {
+    return deletePlan(lower);
+  }
+  if (!wordPattern(createVerb).test(lower)) return null;
 
   const weekday = matchWeekday(lower);
   const remind = matchClock(raw);
@@ -92,14 +115,17 @@ export function readPlan(data: unknown): TaskPlan | null {
     intent?: unknown;
     reply?: unknown;
     tasks?: unknown;
+    scope?: unknown;
   };
-  const intent = record.intent === "create" || record.intent === "list" || record.intent === "chat"
+  const intent = record.intent === "create" || record.intent === "list" ||
+      record.intent === "chat" || record.intent === "delete"
     ? record.intent
     : null;
   if (!intent) return null;
   const tasks = Array.isArray(record.tasks)
     ? record.tasks.map(readDraft).filter((item): item is TaskDraft => item !== null).slice(0, 5)
     : [];
+  if (intent === "delete") return readDelete(record, tasks);
   return {
     intent,
     reply: typeof record.reply === "string" ? record.reply.trim() : "",
@@ -109,7 +135,19 @@ export function readPlan(data: unknown): TaskPlan | null {
 
 export function reconcilePlan(text: string, plan: TaskPlan | null): TaskPlan | null {
   const local = fallbackPlan(text);
+  if (asksToDelete(text)) {
+    if (local?.intent === "delete" && local.remove?.scope !== "unclear") return local;
+    if (plan?.intent === "delete" && plan.remove && plan.remove.scope !== "unclear") return plan;
+    return local ?? unclearDelete();
+  }
   if (!plan) return local;
+  if (plan.intent === "delete") {
+    return local ?? {
+      intent: "chat",
+      reply: "Могу записать задачу, показать список командой /task или удалить задачу по названию.",
+      tasks: [],
+    };
+  }
   if (plan.intent === "list" || local?.intent === "list") {
     return { intent: "list", reply: "", tasks: [] };
   }
@@ -173,6 +211,147 @@ function readDraft(value: unknown): TaskDraft | null {
     days: typeof item.days === "number" ? item.days : undefined,
     remind_time: normalizeClock(item.remind_time),
   };
+}
+
+export function matchingTitles<T extends { title: string }>(rows: T[], query: string): T[] {
+  const needle = fold(query);
+  if (needle.length < 2) return [];
+  const exact = rows.filter((row) => fold(row.title) === needle);
+  if (exact.length > 0) return exact;
+  return rows.filter((row) => fold(row.title).includes(needle) || wordsFit(fold(row.title), needle));
+}
+
+function asksToDelete(text: string): boolean {
+  const lower = text.trim().toLowerCase();
+  const deleting = wordIndex(lower, deleteVerb);
+  if (deleting < 0) return false;
+  const creating = wordIndex(lower, createVerb);
+  return creating < 0 || deleting < creating;
+}
+
+function deletePlan(lower: string): TaskPlan {
+  const rest = lower.replace(wordPattern(deleteVerb), " ").replace(/\s+/g, " ").trim();
+  const weekday = matchWeekday(rest);
+  const monthDay = matchMonthDay(rest);
+  const afterTomorrow = hasWord(rest, "послезавтра");
+  const tomorrow = !afterTomorrow && hasWord(rest, "завтра");
+  const today = hasWord(rest, "сегодня");
+  const iso = /(\d{4}-\d{2}-\d{2})/.exec(rest);
+  const dated = Boolean(weekday || monthDay || afterTomorrow || tomorrow || today || iso);
+  const title = cleanupDeleteTitle(rest);
+  const wholeList = /^(?:все(?:\s+задачи)?|мои(?:\s+задачи)?|задачи|задача|задачу)$/u.test(rest);
+
+  let scope: DeleteScope = "unclear";
+  if (dated && (!title || wholeList || /^(?:все|мои)(?![\p{L}\p{N}_])/u.test(rest))) {
+    scope = "day";
+  } else if (title) {
+    scope = "title";
+  } else if (wholeList) {
+    scope = "all";
+  }
+
+  return {
+    intent: "delete",
+    reply: "",
+    tasks: [],
+    remove: {
+      scope,
+      title,
+      dated: scope === "day" || (scope === "title" && dated),
+      when: weekday
+        ? "weekday"
+        : afterTomorrow
+        ? "in_days"
+        : tomorrow
+        ? "tomorrow"
+        : monthDay
+        ? "month_day"
+        : iso
+        ? "date"
+        : "today",
+      weekday: weekday?.name,
+      week: weekday?.week,
+      date: iso?.[1],
+      month: monthDay?.month,
+      day: monthDay?.day,
+      days: afterTomorrow ? 2 : undefined,
+    },
+  };
+}
+
+function unclearDelete(): TaskPlan {
+  return {
+    intent: "delete",
+    reply: "",
+    tasks: [],
+    remove: { scope: "unclear", title: "", dated: false, when: "today" },
+  };
+}
+
+function readDelete(
+  record: { scope?: unknown },
+  tasks: TaskDraft[],
+): TaskPlan {
+  const draft = tasks[0];
+  const scope = record.scope === "title" || record.scope === "day" || record.scope === "all"
+    ? record.scope
+    : draft?.title
+    ? "title"
+    : "unclear";
+  const dated = scope === "day" || (draft != null && draft.when !== "today");
+  return {
+    intent: "delete",
+    reply: "",
+    tasks: [],
+    remove: {
+      scope,
+      title: draft?.title ?? "",
+      dated,
+      when: draft?.when ?? "today",
+      weekday: draft?.weekday,
+      week: draft?.week,
+      date: draft?.date,
+      month: draft?.month,
+      day: draft?.day,
+      days: draft?.days,
+    },
+  };
+}
+
+function cleanupDeleteTitle(rest: string): string {
+  let title = rest.replace(/^(?:все\s+)?(?:мои\s+)?(?:задачи|задача|задачу)\s+/i, "");
+  title = title.replace(/^все\s+/i, "");
+  title = title.replace(
+    wordPattern(`(?:на|во|в|про)\\s+(?:следующ(?:ий|ую|ее)\\s+)?(?:${weekdayPattern})`),
+    " ",
+  );
+  title = title.replace(wordPattern(weekdayPattern), " ");
+  title = title.replace(wordPattern("на\\s+\\d{1,2}\\s+[а-яё]+"), " ");
+  title = title.replace(wordPattern("сегодня|завтра|послезавтра"), " ");
+  title = title.replace(wordPattern("\\d{4}-\\d{2}-\\d{2}"), " ");
+  title = title.replace(wordPattern("все|мои|задач[ауи]"), " ");
+  const cleaned = cleanTitle(title);
+  if (/^(?:про|на|во|в|к|ко|по|за|от|до|из)$/i.test(cleaned)) return "";
+  return cleaned;
+}
+
+function wordsFit(task: string, needle: string): boolean {
+  const words = needle.split(" ").filter((word) => word.length > 2);
+  return words.length > 0 && words.every((word) => task.includes(word));
+}
+
+function fold(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .replace(/[^a-zа-я0-9\s]/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function wordIndex(text: string, pattern: string): number {
+  const match = wordPattern(pattern).exec(text);
+  return match?.index ?? -1;
 }
 
 function isListRequest(lower: string): boolean {

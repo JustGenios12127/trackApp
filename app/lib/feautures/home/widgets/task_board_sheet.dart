@@ -52,31 +52,10 @@ class _TaskBoardSheetState extends State<TaskBoardSheet> {
     _visibleMonth = DateTime(_selected.year, _selected.month);
   }
 
-  Map<DateTime, List<TaskDraft>> get _byDay {
-    final grouped = <DateTime, List<TaskDraft>>{};
-    for (final task in widget.tasks) {
-      final due = task.dueOn;
-      if (due == null) continue;
-      final key = TaskCalendar.dateOnly(due);
-      grouped.putIfAbsent(key, () => []).add(task);
-    }
-    for (final tasks in grouped.values) {
-      tasks.sort((a, b) {
-        final aTime = a.remindAt;
-        final bTime = b.remindAt;
-        if (aTime == null && bTime == null) return a.title.compareTo(b.title);
-        if (aTime == null) return 1;
-        if (bTime == null) return -1;
-        return aTime.compareTo(bTime);
-      });
-    }
-    return grouped;
-  }
+  Map<DateTime, List<TaskDraft>> get _byDay =>
+      TaskCalendar.groupByDay(widget.tasks);
 
-  List<TaskDraft> get _undated => [
-    for (final task in widget.tasks)
-      if (task.dueOn == null) task,
-  ];
+  List<TaskDraft> get _undated => TaskCalendar.undated(widget.tasks);
 
   void _shiftMonth(int delta) {
     setState(() {
@@ -93,7 +72,8 @@ class _TaskBoardSheetState extends State<TaskBoardSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final selectedTasks = _byDay[TaskCalendar.dateOnly(_selected)] ?? const <TaskDraft>[];
+    final selectedTasks =
+        _byDay[TaskCalendar.dateOnly(_selected)] ?? const <TaskDraft>[];
     final bottom = MediaQuery.paddingOf(context).bottom;
 
     return Material(
@@ -118,14 +98,21 @@ class _TaskBoardSheetState extends State<TaskBoardSheet> {
                 Text('ЗАДАЧИ', style: AppText.labelSm(AppColors.outline)),
                 const SizedBox(width: 8),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 2,
+                  ),
                   decoration: BoxDecoration(
                     color: AppColors.surfaceHighest,
                     borderRadius: BorderRadius.circular(99),
                   ),
                   child: Text(
                     '${widget.tasks.length}',
-                    style: AppText.labelSm(AppColors.onSurface, weight: FontWeight.w500, letterSpacing: 0),
+                    style: AppText.labelSm(
+                      AppColors.onSurface,
+                      weight: FontWeight.w500,
+                      letterSpacing: 0,
+                    ),
                   ),
                 ),
                 const Spacer(),
@@ -244,7 +231,10 @@ class _MonthGrid extends StatelessWidget {
                   child: Text(
                     label,
                     textAlign: TextAlign.center,
-                    style: AppText.labelSm(AppColors.outline, weight: FontWeight.w500),
+                    style: AppText.labelSm(
+                      AppColors.outline,
+                      weight: FontWeight.w500,
+                    ),
                   ),
                 ),
             ],
@@ -258,8 +248,14 @@ class _MonthGrid extends StatelessWidget {
                     child: _DayCell(
                       day: days[row * 7 + column],
                       today: today,
-                      selected: TaskCalendar.sameDay(days[row * 7 + column], selected),
-                      count: counts[days[row * 7 + column]]?.length ?? 0,
+                      selected: TaskCalendar.sameDay(
+                        days[row * 7 + column],
+                        selected,
+                      ),
+                      count:
+                          counts[TaskCalendar.dateOnly(days[row * 7 + column])]
+                              ?.length ??
+                          0,
                       muted: days[row * 7 + column].month != month.month,
                       compact: true,
                       onTap: () => onSelect(days[row * 7 + column]),
@@ -307,12 +303,15 @@ class _DayCell extends StatelessWidget {
     return Semantics(
       button: true,
       selected: selected,
-      label: '${TaskCalendar.weekdayFull[day.weekday - 1]}, ${TaskCalendar.dayTitle(day)}',
+      label:
+          '${TaskCalendar.weekdayFull[day.weekday - 1]}, ${TaskCalendar.dayTitle(day)}',
       child: InkWell(
         onTap: onTap,
         customBorder: const CircleBorder(),
         child: Padding(
-          key: ValueKey('${compact ? 'month' : 'week'}-${day.year}-${day.month}-${day.day}'),
+          key: ValueKey(
+            '${compact ? 'month' : 'week'}-${day.year}-${day.month}-${day.day}',
+          ),
           padding: const EdgeInsets.symmetric(vertical: 4),
           child: Column(
             children: [
@@ -435,9 +434,16 @@ class _EmptyDay extends StatelessWidget {
       ),
       child: Column(
         children: [
-          const Icon(Icons.event_available_outlined, color: AppColors.outline, size: 22),
+          const Icon(
+            Icons.event_available_outlined,
+            color: AppColors.outline,
+            size: 22,
+          ),
           const SizedBox(height: 8),
-          Text('В этот день свободно', style: AppText.bodyMd(AppColors.onSurfaceVariant)),
+          Text(
+            'В этот день свободно',
+            style: AppText.bodyMd(AppColors.onSurfaceVariant),
+          ),
         ],
       ),
     );

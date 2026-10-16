@@ -36,10 +36,7 @@ void main() {
   });
 
   testWidgets('пустой вход просит email и пароль', (tester) async {
-    await _pump(
-      tester,
-      AuthScreen(auth: _MemoryAuth()),
-    );
+    await _pump(tester, AuthScreen(auth: _MemoryAuth()));
 
     await tester.tap(find.text('Войти'));
     await tester.pump();
@@ -77,12 +74,16 @@ void main() {
     await tester.tap(find.text('Создать аккаунт'));
     await tester.pump();
 
-    expect(find.text('Аккаунт создан. Подтверди почту и затем войди.'), findsNothing);
+    expect(
+      find.text('Аккаунт создан. Подтверди почту и затем войди.'),
+      findsNothing,
+    );
     expect(auth.current?.email, 'ada@track.app');
   });
 
   testWidgets('неверный пароль остаётся на экране входа', (tester) async {
-    final auth = _MemoryAuth()..failure = const AuthProblem('Неверный email или пароль.');
+    final auth = _MemoryAuth()
+      ..failure = const AuthProblem('Неверный email или пароль.');
     await _pump(tester, AuthScreen(auth: auth));
 
     await tester.enterText(find.byType(TextField).at(0), 'ada@track.app');
@@ -179,7 +180,10 @@ void main() {
   });
 
   testWidgets('чат без аккаунта не открывается', (tester) async {
-    await _pump(tester, AuthGate(auth: _MemoryAuth(), chat: const _QuietChat()));
+    await _pump(
+      tester,
+      AuthGate(auth: _MemoryAuth(), chat: const _QuietChat()),
+    );
     await tester.pump();
 
     expect(find.text('Вход'), findsOneWidget);
@@ -192,12 +196,7 @@ Future<void> _pump(WidgetTester tester, Widget home) async {
   tester.view.physicalSize = const Size(390, 844);
   addTearDown(tester.view.resetPhysicalSize);
   addTearDown(tester.view.resetDevicePixelRatio);
-  await tester.pumpWidget(
-    MaterialApp(
-      theme: AppTheme.dark,
-      home: home,
-    ),
-  );
+  await tester.pumpWidget(MaterialApp(theme: AppTheme.dark, home: home));
 }
 
 class _MemoryAuth implements AuthGateway {
@@ -225,7 +224,11 @@ class _MemoryAuth implements AuthGateway {
   Future<void> signIn({required String email, required String password}) async {
     final failure = this.failure;
     if (failure != null) throw failure;
-    current = AuthAccount(id: 'user-1', email: email.trim(), createdAt: DateTime.utc(2026, 10, 14));
+    current = AuthAccount(
+      id: 'user-1',
+      email: email.trim(),
+      createdAt: DateTime.utc(2026, 10, 14),
+    );
     _updates.add(current);
   }
 
@@ -250,6 +253,9 @@ class _FixedTasks implements AccountTasks {
 
   @override
   Future<int> openCount() async => count;
+
+  @override
+  Future<List<AccountTask>> openList() async => const [];
 }
 
 class _QuietChat implements ChatGateway {

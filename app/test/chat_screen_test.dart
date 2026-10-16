@@ -2,6 +2,7 @@ import 'package:app/app/app_theme.dart';
 import 'package:app/feautures/home/chat_screen.dart';
 import 'package:app/feautures/home/data/chat_gateway.dart';
 import 'package:app/feautures/home/models/chat_item.dart';
+import 'package:app/feautures/home/widgets/reminder_banner.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -18,10 +19,7 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
 
     await tester.pumpWidget(
-      MaterialApp(
-        theme: AppTheme.dark,
-        home: const ChatScreen(),
-      ),
+      MaterialApp(theme: AppTheme.dark, home: const ChatScreen()),
     );
 
     expect(find.text('Ai Assistant'), findsOneWidget);
@@ -157,7 +155,10 @@ void main() {
       ),
     );
 
-    await tester.enterText(find.byType(TextField), 'запиши задачу сделать уборку');
+    await tester.enterText(
+      find.byType(TextField),
+      'запиши задачу сделать уборку',
+    );
     await tester.tap(find.byIcon(Icons.send));
     await tester.pump();
     await tester.pump();
@@ -181,7 +182,50 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('напоминание показывается карточкой и закрывается', (tester) async {
+  testWidgets('удаление показывает ответ и не оставляет задачу карточкой', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.dark,
+        home: ChatScreen(
+          gateway: _ScriptedGateway((messages, now) async {
+            return ChatResult(
+              reply: 'Удалил «Сходить в магазин».',
+              tasks: [
+                StoredTask(
+                  id: 'shop',
+                  title: 'Сходить в магазин',
+                  subtitle: 'Сегодня',
+                  remind: false,
+                  dueOn: DateTime(now.year, now.month, now.day),
+                ),
+              ],
+              kind: ChatKind.deleted,
+            );
+          }),
+        ),
+      ),
+    );
+
+    await tester.enterText(
+      find.byType(TextField),
+      'удали задачу сходить в магазин',
+    );
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('Удалил «Сходить в магазин».'), findsOneWidget);
+    expect(find.text('• Удалено'), findsOneWidget);
+    expect(find.text('• Сохранено'), findsNothing);
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('напоминание показывается карточкой и закрывается', (
+    tester,
+  ) async {
     tester.view.devicePixelRatio = 1;
     tester.view.physicalSize = const Size(390, 844);
     addTearDown(tester.view.resetPhysicalSize);
@@ -209,15 +253,15 @@ void main() {
     await tester.pump();
     await tester.pump();
 
+    expect(find.byType(ReminderBanner), findsOneWidget);
     expect(find.text('Постирать вещи'), findsOneWidget);
-    expect(find.text('• Напоминание'), findsOneWidget);
     expect(find.text('Пт, 16 окт · 14:00'), findsOneWidget);
 
     await tester.tap(find.text('Понятно'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
 
-    expect(find.text('• Напоминание'), findsNothing);
+    expect(find.byType(ReminderBanner), findsNothing);
     expect(find.text('Постирать вещи'), findsNothing);
     expect(tester.takeException(), isNull);
   });
@@ -226,7 +270,8 @@ void main() {
 class _ScriptedGateway implements ChatGateway {
   const _ScriptedGateway(this._reply, {this.pending = const []});
 
-  final Future<ChatResult> Function(List<ChatTurn> messages, DateTime now) _reply;
+  final Future<ChatResult> Function(List<ChatTurn> messages, DateTime now)
+  _reply;
   final List<StoredTask> pending;
 
   @override

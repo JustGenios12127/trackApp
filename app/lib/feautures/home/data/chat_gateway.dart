@@ -25,7 +25,7 @@ class StoredTask {
   final DateTime? dueOn;
 }
 
-enum ChatKind { chat, created, listed }
+enum ChatKind { chat, created, listed, deleted }
 
 class ChatResult {
   const ChatResult({
@@ -65,7 +65,9 @@ class SupabaseChatGateway implements ChatGateway {
     required List<ChatTurn> messages,
     required DateTime now,
   }) async {
-    final last = messages.isEmpty ? '' : messages.last.content.trim().toLowerCase();
+    final last = messages.isEmpty
+        ? ''
+        : messages.last.content.trim().toLowerCase();
     final list = last == '/task' || last == '/tasks';
     try {
       final response = await Supabase.instance.client.functions.invoke(
@@ -127,6 +129,7 @@ class SupabaseChatGateway implements ChatGateway {
       kind: switch (data['kind']) {
         'created' => ChatKind.created,
         'listed' => ChatKind.listed,
+        'deleted' => ChatKind.deleted,
         _ => ChatKind.chat,
       },
     );
@@ -147,13 +150,15 @@ class SupabaseChatGateway implements ChatGateway {
   }
 
   DateTime? _date(Object? value) {
-    if (value is! String || value.length < 10) return null;
-    final parts = value.split('-');
-    if (parts.length < 3) return null;
-    final year = int.tryParse(parts[0]);
-    final month = int.tryParse(parts[1]);
-    final day = int.tryParse(parts[2]);
+    if (value is DateTime) return DateTime(value.year, value.month, value.day);
+    if (value is! String) return null;
+    final match = RegExp(r'^(\d{4})-(\d{2})-(\d{2})').firstMatch(value);
+    if (match == null) return null;
+    final year = int.tryParse(match.group(1)!);
+    final month = int.tryParse(match.group(2)!);
+    final day = int.tryParse(match.group(3)!);
     if (year == null || month == null || day == null) return null;
+    if (month < 1 || month > 12 || day < 1 || day > 31) return null;
     return DateTime(year, month, day);
   }
 

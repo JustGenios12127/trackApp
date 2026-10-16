@@ -7,12 +7,35 @@ import 'chat_gateway.dart';
 import 'reminder_planner.dart';
 
 class ReminderController extends ChangeNotifier {
-  ReminderController({
-    DateTime Function()? clock,
-    this.onDue,
-  }) : _clock = clock ?? DateTime.now;
+  ReminderController({DateTime Function()? clock, this.onDue})
+    : _clock = clock ?? DateTime.now;
 
   static const _prefsKey = 'dismissed_reminder_ids';
+  static final List<void Function(String id)> _listeners = [];
+
+  static void listen(void Function(String id) onDismiss) {
+    if (_listeners.contains(onDismiss)) return;
+    _listeners.add(onDismiss);
+  }
+
+  static void unlisten(void Function(String id) onDismiss) {
+    _listeners.remove(onDismiss);
+  }
+
+  static Future<void> noteDismissed(String id) async {
+    if (id.isEmpty) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final ids = List<String>.from(prefs.getStringList(_prefsKey) ?? const []);
+      if (!ids.contains(id)) {
+        ids.add(id);
+        await prefs.setStringList(_prefsKey, ids);
+      }
+    } catch (_) {}
+    for (final listener in List<void Function(String id)>.of(_listeners)) {
+      listener(id);
+    }
+  }
 
   final DateTime Function() _clock;
   final void Function(StoredTask task)? onDue;
@@ -34,6 +57,14 @@ class ReminderController extends ChangeNotifier {
     _publish();
   }
 
+  Future<void> drop(Iterable<String> ids) async {
+    await _ensurePrefs();
+    final remove = ids.where((id) => id.isNotEmpty).toSet();
+    if (remove.isEmpty) return;
+    _tasks.removeWhere((task) => remove.contains(task.id));
+    _publish();
+  }
+
   Future<void> sync(List<StoredTask> tasks) async {
     await _ensurePrefs();
     final byId = {for (final task in _tasks) task.id: task};
@@ -47,8 +78,19 @@ class ReminderController extends ChangeNotifier {
   }
 
   Future<void> dismiss(String id) async {
+    if (_disposed || id.isEmpty) return;
     _dismissed.add(id);
     await _persist();
+    _publish();
+  }
+
+  Future<void> reloadDismissed() async {
+    await _ensurePrefs();
+    if (_disposed) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _dismissed.addAll(prefs.getStringList(_prefsKey) ?? const []);
+    } catch (_) {}
     _publish();
   }
 

@@ -3,14 +3,17 @@ import {
   localClock,
   remindInstant,
   resolveDueDate,
+  spokenWhen,
   taskSubtitle,
   type DueInput,
 } from "./dates.ts";
 import {
   extractJson,
   fallbackPlan,
+  matchingTitles,
   readPlan,
   reconcilePlan,
+  type DeleteTarget,
   type TaskDraft,
   type TaskPlan,
 } from "./parse.ts";
@@ -114,6 +117,10 @@ Deno.serve(async (req) => {
       return await safeList(context, userId, authorization);
     }
 
+    if (plan.intent === "delete") {
+      return await safeDelete(plan, context, userId, authorization);
+    }
+
     const saved = await createTasks(plan.tasks, context, userId, authorization);
     if (saved.length === 0) {
       return json({
@@ -160,6 +167,8 @@ function failure(error: unknown, fallback: string): Response {
 async function understand(messages: ChatMessage[], context: ClientContext): Promise<TaskPlan | null> {
   const last = messages[messages.length - 1].content;
   const local = fallbackPlan(last);
+  if (local?.intent === "list") return local;
+  if (local?.intent === "delete" && local.remove?.scope !== "unclear") return local;
   const apiKey = Deno.env.get("GROQ_API_KEY");
   if (!apiKey) {
     return local;
@@ -185,7 +194,8 @@ async function chatReply(messages: ChatMessage[]): Promise<string | null> {
   return askGroq(apiKey, model, [
     {
       role: "system",
-      content: "Ты ассистент TrackApp. Отвечай по-русски, коротко. Задачи уже сохраняются отдельно, не проси дату, если её нет.",
+      content:
+        "Ты ассистент TrackApp. Отвечай по-русски, коротко. Не говори, что удалил или записал задачу: это делает сервер. Не проси дату, если её нет.",
     },
     ...messages,
   ]);
@@ -307,6 +317,137 @@ async function listResponse(context: ClientContext, userId: string, authorizatio
   };
 }
 
+async function safeDelete(
+  plan: TaskPlan,
+  context: ClientContext,
+  userId: string,
+  authorization: string,
+): Promise<Response> {
+  try {
+    return json(await deleteResponse(plan, context, userId, authorization));
+  } catch (error) {
+    return failure(error, "Не получилось удалить задачу. Попробуй ещё раз.");
+  }
+}
+
+async function deleteResponse(
+  plan: TaskPlan,
+  context: ClientContext,
+  userId: string,
+  authorization: string,
+) {
+  const target = plan.remove;
+  if (!target || target.scope === "unclear") {
+    return {
+      reply: "Напиши, что удалить: «удали задачу сходить в магазин» или «удали все задачи на пятницу».",
+      tasks: [],
+      kind: "chat",
+    };
+  }
+
+  const rows = await rest<TaskRow[]>(
+    `tasks?user_id=eq.${userId}&status=eq.open&select=id,title,due_on,remind_at&order=due_on.asc,created_at.asc&limit=1000`,
+    authorization,
+  );
+  const dueOn = target.scope === "day" || target.dated
+    ? resolveDueDate(context.today, target)
+    : null;
+  if ((target.scope === "day" || target.dated) && !dueOn) {
+    return { reply: "Не понял дату. Ничего не удалил.", tasks: [], kind: "chat" };
+  }
+
+  let chosen = rows;
+  if (dueOn) {
+    chosen = chosen.filter((row) => row.due_on.slice(0, 10) === dueOn);
+  }
+  if (target.scope === "title") {
+    chosen = matchingTitles(chosen, target.title);
+  }
+
+  if (chosen.length === 0) {
+    return { reply: missingDelete(target, context.today, dueOn), tasks: [], kind: "chat" };
+  }
+
+  const ids = chosen.map((row) => row.id).filter((id) => userIdPattern.test(id));
+  const removed = new Set(await deleteIds(ids, userId, authorization));
+  const gone = chosen.filter((row) => removed.has(row.id));
+  if (gone.length === 0) {
+    return {
+      reply: "Не получилось удалить задачу. Попробуй ещё раз.",
+      tasks: [],
+      kind: "chat",
+    };
+  }
+
+  return {
+    reply: deletedReply(gone, target, context.today, dueOn),
+    tasks: gone.map((row) => toView(row, context)),
+    kind: "deleted",
+  };
+}
+
+async function deleteIds(ids: string[], userId: string, authorization: string): Promise<string[]> {
+  const gone: string[] = [];
+  for (let index = 0; index < ids.length; index += 40) {
+    const part = ids.slice(index, index + 40);
+    const filter = `id=in.(${part.join(",")})`;
+    const rows = await rest<TaskRow[]>(
+      `tasks?user_id=eq.${userId}&${filter}`,
+      authorization,
+      { method: "DELETE", prefer: "return=representation" },
+    );
+    if (rows.length > 0) {
+      gone.push(...rows.map((row) => row.id));
+      continue;
+    }
+    const left = await rest<Array<{ id: string }>>(
+      `tasks?user_id=eq.${userId}&${filter}&select=id`,
+      authorization,
+    );
+    const still = new Set(left.map((row) => row.id));
+    for (const id of part) {
+      if (!still.has(id)) gone.push(id);
+    }
+  }
+  return gone;
+}
+
+function missingDelete(target: DeleteTarget, today: string, dueOn: string | null): string {
+  if (target.scope === "all") return "Открытых задач нет. Удалять нечего.";
+  if (target.scope === "day" && dueOn) {
+    return `На ${spokenWhen(today, dueOn)} задач нет. Ничего не удалил.`;
+  }
+  if (target.title) return `Не нашёл «${target.title}». Ничего не удалил.`;
+  return "Не нашёл такие задачи. Ничего не удалил.";
+}
+
+function deletedReply(
+  rows: TaskRow[],
+  target: DeleteTarget,
+  today: string,
+  dueOn: string | null,
+): string {
+  if (target.scope === "all") return `Удалил все открытые задачи: ${countTasks(rows.length)}.`;
+  if (target.scope === "day" && dueOn) {
+    return `Удалил ${countTasks(rows.length)} на ${spokenWhen(today, dueOn)}.`;
+  }
+  if (rows.length === 1) return `Удалил «${rows[0].title}».`;
+  const names = rows.slice(0, 5).map((row) => `«${row.title}»`).join(", ");
+  const extra = rows.length > 5 ? ` и ещё ${rows.length - 5}` : "";
+  return `Удалил ${countTasks(rows.length)}: ${names}${extra}.`;
+}
+
+function countTasks(count: number): string {
+  const mod100 = count % 100;
+  const mod10 = count % 10;
+  if (mod100 > 10 && mod100 < 20) return `${count} задач`;
+  if (mod10 === 1) return `${count} задачу`;
+  if (mod10 >= 2 && mod10 <= 4) return `${count} задачи`;
+  return `${count} задач`;
+}
+
+type TaskRow = { id: string; title: string; due_on: string; remind_at: string | null };
+
 function toView(
   row: { id: string; title: string; due_on: string; remind_at: string | null },
   context: ClientContext,
@@ -358,13 +499,16 @@ function plannerPrompt(today: string): string {
     "Ты разбираешь последнюю фразу пользователя для приложения задач TrackApp.",
     `Сегодня по календарю телефона: ${today}. Не выдумывай другую сегодняшнюю дату.`,
     "Верни только JSON без пояснений:",
-    '{"intent":"create|list|chat","reply":"","tasks":[{"title":"","when":"today|tomorrow|weekday|date|month_day","weekday":"","week":"upcoming|next","date":"","month":0,"day":0,"remind_time":null}]}',
+    '{"intent":"create|list|delete|chat","scope":"title|day|all","reply":"","tasks":[{"title":"","when":"today|tomorrow|weekday|date|month_day","weekday":"","week":"upcoming|next","date":"","month":0,"day":0,"remind_time":null}]}',
     "intent=create, если человек просит записать, поставить, добавить или напомнить задачу.",
     "Если дата не названа, when=today. Не спрашивай дату.",
     "День недели: when=weekday, weekday на английском, week=upcoming. Если сказано «следующий вторник», week=next.",
     "«15 октября» — when=month_day. Точная дата YYYY-MM-DD — when=date.",
     "remind_time только если названо время, формат HH:MM. Иначе null.",
     "title — только действие, без даты и без слова «задача».",
+    "intent=delete, если просит удалить, убрать, стереть или отменить задачу.",
+    "«удали задачу сходить в магазин» — scope=title, title=действие. Не пиши, что уже удалил.",
+    "«удали все задачи на пятницу» — scope=day и дата этого дня. «удали все задачи» — scope=all.",
     "intent=list, если просит показать задачи.",
     "intent=chat для обычного разговора, reply — короткий ответ по-русски, tasks пустой.",
     "Разбирай только последнее сообщение.",

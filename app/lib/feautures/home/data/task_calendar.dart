@@ -11,6 +11,20 @@ abstract final class TaskCalendar {
     'Суббота',
     'Воскресенье',
   ];
+  static const _shortMonths = [
+    'янв',
+    'фев',
+    'мар',
+    'апр',
+    'мая',
+    'июн',
+    'июл',
+    'авг',
+    'сен',
+    'окт',
+    'ноя',
+    'дек',
+  ];
   static const _monthGenitive = [
     'января',
     'февраля',
@@ -40,7 +54,8 @@ abstract final class TaskCalendar {
     'Декабрь',
   ];
 
-  static DateTime dateOnly(DateTime value) => DateTime(value.year, value.month, value.day);
+  static DateTime dateOnly(DateTime value) =>
+      DateTime(value.year, value.month, value.day);
 
   static DateTime mondayOf(DateTime value) {
     final day = dateOnly(value);
@@ -58,6 +73,51 @@ abstract final class TaskCalendar {
     return [for (var i = 0; i < 42; i++) cursor.add(Duration(days: i))];
   }
 
+  static Map<DateTime, List<TaskDraft>> groupByDay(List<TaskDraft> tasks) {
+    final grouped = <DateTime, List<TaskDraft>>{};
+    for (final task in tasks) {
+      final due = task.dueOn;
+      if (due == null) continue;
+      final key = dateOnly(due);
+      (grouped[key] ??= []).add(task);
+    }
+    for (final dayTasks in grouped.values) {
+      dayTasks.sort((a, b) {
+        final aTime = a.remindAt;
+        final bTime = b.remindAt;
+        if (aTime == null && bTime == null) return a.title.compareTo(b.title);
+        if (aTime == null) return 1;
+        if (bTime == null) return -1;
+        return aTime.compareTo(bTime);
+      });
+    }
+    return grouped;
+  }
+
+  static List<TaskDraft> undated(List<TaskDraft> tasks) => [
+    for (final task in tasks)
+      if (task.dueOn == null) task,
+  ];
+
+  static String whenLabel(DateTime? dueOn, DateTime? remindAt, DateTime today) {
+    if (dueOn == null) return '';
+    final day = dateOnly(dueOn);
+    final now = dateOnly(today);
+    final tomorrow = DateTime(now.year, now.month, now.day + 1);
+    final String when;
+    if (sameDay(day, now)) {
+      when = 'Сегодня';
+    } else if (sameDay(day, tomorrow)) {
+      when = 'Завтра';
+    } else {
+      when =
+          '${weekdayShort[day.weekday - 1]}, ${day.day} ${_shortMonths[day.month - 1]}';
+    }
+    final time = clock(remindAt);
+    if (time == null) return when;
+    return '$when · $time';
+  }
+
   static DateTime initialDay(List<TaskDraft> tasks, DateTime now) {
     final today = dateOnly(now);
     final days = {
@@ -71,7 +131,8 @@ abstract final class TaskCalendar {
     return past.last;
   }
 
-  static String dayTitle(DateTime day) => '${day.day} ${_monthGenitive[day.month - 1]}';
+  static String dayTitle(DateTime day) =>
+      '${day.day} ${_monthGenitive[day.month - 1]}';
 
   static String monthTitle(DateTime month) =>
       '${monthNominative[month.month - 1]} ${month.year}';

@@ -1,8 +1,12 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../app/app_theme.dart';
 import 'data/chat_gateway.dart';
+import 'data/reminder_chime.dart';
 import 'data/reminder_controller.dart';
 import 'data/system_reminder.dart';
 import 'models/chat_item.dart';
@@ -38,8 +42,12 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   final _controller = TextEditingController();
   final _scroll = ScrollController();
   late final List<ChatItem> _items = [...widget.items];
-  late final ChatGateway _gateway = widget.gateway ?? const SupabaseChatGateway();
-  late final ReminderController _reminders = ReminderController(onDue: _announce);
+  late final ChatGateway _gateway =
+      widget.gateway ?? const SupabaseChatGateway();
+  late final ReminderController _reminders = ReminderController(
+    onDue: _announce,
+  );
+  late final void Function(String id) _externalDismiss = _reminders.dismiss;
   var _sending = false;
   var _generation = 0;
 
@@ -47,12 +55,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    ReminderController.listen(_externalDismiss);
     _loadReminders();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    ReminderController.unlisten(_externalDismiss);
     _reminders.dispose();
     _controller.dispose();
     _scroll.dispose();
@@ -62,7 +72,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      _reminders.tick();
+      _reminders.reloadDismissed();
     }
   }
 
@@ -74,12 +84,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     final generation = _generation;
     setState(() {
       _sending = true;
-      _items.add(
-        UserMessage(
-          text: text,
-          meta: '${_clock(now)} • Отправлено',
-        ),
-      );
+      _items.add(UserMessage(text: text, meta: '${_clock(now)} • Отправлено'));
       _controller.clear();
     });
     _scrollToEnd();
@@ -109,7 +114,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       setState(() {
         _items.add(
           const AiReplyMessage(
-            text: 'Не получилось получить ответ. Проверь интернет и попробуй ещё раз.',
+            text:
+                'Не получилось получить ответ. Проверь интернет и попробуй ещё раз.',
             status: '• Ошибка',
           ),
         );
@@ -132,6 +138,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     try {
       if (result.kind == ChatKind.listed) {
         await _reminders.replace(result.tasks);
+      } else if (result.kind == ChatKind.deleted) {
+        await _reminders.drop(result.tasks.map((task) => task.id));
       } else if (result.tasks.isNotEmpty) {
         await _reminders.sync(result.tasks);
       }
@@ -140,22 +148,29 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   }
 
   void _announce(StoredTask task) {
-    final at = task.remindAt;
-    final late = at != null &&
-        DateTime.now().toUtc().difference(at.toUtc()) > const Duration(seconds: 2);
-    if (!SystemReminder.instance.isReady) {
-      _chime();
-      return;
-    }
-    if (late) {
-      SystemReminder.instance.showNow(task);
-    }
+    unawaited(_deliver(task));
   }
 
-  void _chime() {
-    try {
-      SystemSound.play(SystemSoundType.alert);
-    } catch (_) {}
+  Future<void> _deliver(StoredTask task) async {
+    final system = SystemReminder.instance.isReady;
+    final phone =
+        defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS;
+    final resumed =
+        WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
+    final at = task.remindAt;
+    final late =
+        at != null &&
+        DateTime.now().toUtc().difference(at.toUtc()) >
+            const Duration(seconds: 2);
+    final systemPlays = system && phone && !resumed;
+    if (system && !late && (resumed || !phone)) {
+      await SystemReminder.instance.cancel(task.id);
+    }
+    if (!systemPlays) await ReminderChime.play();
+    if (system && late) {
+      await SystemReminder.instance.showNow(task, audible: systemPlays);
+    }
   }
 
   void _clear() {
@@ -168,6 +183,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   }
 
   ChatItem _resultItem(ChatResult result) {
+    if (result.kind == ChatKind.deleted) {
+      return AiReplyMessage(text: result.reply, status: '• Удалено');
+    }
     if (result.kind == ChatKind.listed) {
       return AiTaskListMessage(
         status: '• Список',
@@ -248,7 +266,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                   switchInCurve: Curves.easeOut,
                   switchOutCurve: Curves.easeIn,
                   child: task == null
-                      ? const SizedBox(key: ValueKey('none'), width: double.infinity)
+                      ? const SizedBox(
+                          key: ValueKey('none'),
+                          width: double.infinity,
+                        )
                       : Padding(
                           key: ValueKey(task.id),
                           padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
@@ -282,7 +303,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                     Padding(
                       padding: const EdgeInsets.fromLTRB(20, 28, 20, 0),
                       child: Text(
-                        'Напиши, например: «запиши задачу сделать уборку». Команда /task покажет все задачи из базы.',
+                        'Напиши, например: «запиши задачу сделать уборку». /task покажет список, «удали задачу …» сотрёт её из базы.',
                         style: AppText.bodyMd(AppColors.outline),
                       ),
                     ),
@@ -312,7 +333,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               sending: _sending,
               onSend: _send,
             ),
-            if (!widget.embedded) ChatBottomNav(onProfile: widget.onOpenProfile),
+            if (!widget.embedded)
+              ChatBottomNav(onProfile: widget.onOpenProfile),
           ],
         ),
       ],

@@ -66,13 +66,7 @@ class _HomeShellState extends State<HomeShell> {
           body: Stack(
             fit: StackFit.expand,
             children: [
-              _page(
-                0,
-                ChatScreen(
-                  embedded: true,
-                  gateway: widget.chat,
-                ),
-              ),
+              _page(0, ChatScreen(embedded: true, gateway: widget.chat)),
               _page(
                 1,
                 TasksScreen(
@@ -81,7 +75,10 @@ class _HomeShellState extends State<HomeShell> {
                   visible: _index == 1,
                 ),
               ),
-              _page(2, const CalendarScreen()),
+              _page(
+                2,
+                CalendarScreen(tasks: widget.tasks, visible: _index == 2),
+              ),
               _page(
                 3,
                 ProfileScreen(

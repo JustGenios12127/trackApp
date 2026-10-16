@@ -15,6 +15,26 @@ void main() {
     expect(TaskCalendar.monthGrid(DateTime(2026, 10)).first.weekday, 1);
   });
 
+  test('задача со временем остаётся в своём дне', () {
+    final grouped = TaskCalendar.groupByDay([
+      TaskDraft(
+        title: 'Вечер',
+        subtitle: '',
+        icon: Icons.task_alt,
+        dueOn: DateTime(2026, 10, 16, 21),
+      ),
+    ]);
+    expect(grouped[DateTime(2026, 10, 16)]!.single.title, 'Вечер');
+    expect(
+      TaskCalendar.whenLabel(
+        DateTime(2026, 10, 16, 21),
+        DateTime(2026, 10, 16, 21),
+        DateTime(2026, 10, 14),
+      ),
+      'Пт, 16 окт · 21:00',
+    );
+  });
+
   test('открывается ближайший день с задачей', () {
     final tasks = [
       TaskDraft(
@@ -36,7 +56,9 @@ void main() {
     );
   });
 
-  testWidgets('календарь показывает неделю и задачи другого дня', (tester) async {
+  testWidgets('календарь показывает неделю и задачи другого дня', (
+    tester,
+  ) async {
     tester.view.devicePixelRatio = 1;
     tester.view.physicalSize = const Size(390, 844);
     addTearDown(tester.view.resetPhysicalSize);

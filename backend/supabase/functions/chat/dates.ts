@@ -174,6 +174,10 @@ export function taskSubtitle(
   return remind ? `${when} · ${remind}` : when;
 }
 
+export function spokenWhen(today: string, dueOn: string): string {
+  return longWhen(today, dueOn);
+}
+
 export function confirmationLine(
   title: string,
   today: string,
