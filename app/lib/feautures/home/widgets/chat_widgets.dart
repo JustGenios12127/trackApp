@@ -166,9 +166,10 @@ class DailyOverviewCard extends StatelessWidget {
 }
 
 class ChatItemView extends StatelessWidget {
-  const ChatItemView({super.key, required this.item});
+  const ChatItemView({super.key, required this.item, this.onDeleteTask});
 
   final ChatItem item;
+  final Future<void> Function(TaskDraft task)? onDeleteTask;
 
   @override
   Widget build(BuildContext context) {
@@ -191,7 +192,12 @@ class ChatItemView extends StatelessWidget {
         :final board,
         ) =>
         board
-            ? TaskBoardEntry(text: text, count: badge, tasks: tasks)
+            ? TaskBoardEntry(
+                text: text,
+                count: badge,
+                tasks: tasks,
+                onDelete: onDeleteTask,
+              )
             : AiTaskListCard(
                 status: status,
                 text: text,
@@ -477,11 +483,13 @@ class TaskBoardEntry extends StatelessWidget {
     required this.text,
     required this.tasks,
     this.count,
+    this.onDelete,
   });
 
   final String text;
   final String? count;
   final List<TaskDraft> tasks;
+  final Future<void> Function(TaskDraft task)? onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -491,7 +499,7 @@ class TaskBoardEntry extends StatelessWidget {
         const AiMessageHeader(status: '• Список'),
         const SizedBox(height: 8),
         GestureDetector(
-          onTap: () => showTaskBoard(context, tasks: tasks),
+          onTap: () => showTaskBoard(context, tasks: tasks, onDelete: onDelete),
           child: ChatGlass(
             radius: 24,
             topLeft: 4,

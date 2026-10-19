@@ -1,4 +1,4 @@
-import { weekdayNumber } from "./dates.ts";
+import { isIsoDate, weekdayNumber, type CalendarPoint, type DateMatch } from "./dates.ts";
 
 export type TaskDraft = {
   title: string;
@@ -12,7 +12,7 @@ export type TaskDraft = {
   remind_time?: string | null;
 };
 
-export type DeleteScope = "title" | "day" | "all" | "unclear";
+export type DeleteScope = "title" | "day" | "days" | "all" | "unclear";
 
 export type DeleteTarget = {
   scope: DeleteScope;
@@ -25,6 +25,8 @@ export type DeleteTarget = {
   month?: number;
   day?: number;
   days?: number;
+  points?: CalendarPoint[];
+  match?: DateMatch;
 };
 
 export type TaskPlan = {
@@ -116,6 +118,7 @@ export function readPlan(data: unknown): TaskPlan | null {
     reply?: unknown;
     tasks?: unknown;
     scope?: unknown;
+    match?: unknown;
   };
   const intent = record.intent === "create" || record.intent === "list" ||
       record.intent === "chat" || record.intent === "delete"
@@ -231,18 +234,20 @@ function asksToDelete(text: string): boolean {
 
 function deletePlan(lower: string): TaskPlan {
   const rest = lower.replace(wordPattern(deleteVerb), " ").replace(/\s+/g, " ").trim();
-  const weekday = matchWeekday(rest);
-  const monthDay = matchMonthDay(rest);
-  const afterTomorrow = hasWord(rest, "послезавтра");
-  const tomorrow = !afterTomorrow && hasWord(rest, "завтра");
-  const today = hasWord(rest, "сегодня");
-  const iso = /(\d{4}-\d{2}-\d{2})/.exec(rest);
-  const dated = Boolean(weekday || monthDay || afterTomorrow || tomorrow || today || iso);
-  const title = cleanupDeleteTitle(rest);
+  const taken = takeDates(rest);
+  const points = taken.points;
+  const weekday = points.length === 0 ? matchWeekday(rest) : null;
+  const afterTomorrow = points.length === 0 && hasWord(rest, "послезавтра");
+  const tomorrow = points.length === 0 && !afterTomorrow && hasWord(rest, "завтра");
+  const todayWord = points.length === 0 && hasWord(rest, "сегодня");
+  const dated = points.length > 0 || Boolean(weekday || afterTomorrow || tomorrow || todayWord);
+  const title = cleanupDeleteTitle(taken.rest);
   const wholeList = /^(?:все(?:\s+задачи)?|мои(?:\s+задачи)?|задачи|задача|задачу)$/u.test(rest);
 
   let scope: DeleteScope = "unclear";
-  if (dated && (!title || wholeList || /^(?:все|мои)(?![\p{L}\p{N}_])/u.test(rest))) {
+  if (points.length > 1 && !title) {
+    scope = "days";
+  } else if (dated && (!title || wholeList || /^(?:все|мои)(?![\p{L}\p{N}_])/u.test(rest))) {
     scope = "day";
   } else if (title) {
     scope = "title";
@@ -250,6 +255,7 @@ function deletePlan(lower: string): TaskPlan {
     scope = "all";
   }
 
+  const first = points[0];
   return {
     intent: "delete",
     reply: "",
@@ -257,24 +263,23 @@ function deletePlan(lower: string): TaskPlan {
     remove: {
       scope,
       title,
-      dated: scope === "day" || (scope === "title" && dated),
-      when: weekday
+      dated: scope === "day" || scope === "days" || (scope === "title" && dated),
+      when: points.length > 0
+        ? "month_day"
+        : weekday
         ? "weekday"
         : afterTomorrow
         ? "in_days"
         : tomorrow
         ? "tomorrow"
-        : monthDay
-        ? "month_day"
-        : iso
-        ? "date"
         : "today",
       weekday: weekday?.name,
       week: weekday?.week,
-      date: iso?.[1],
-      month: monthDay?.month,
-      day: monthDay?.day,
+      month: first?.month,
+      day: first?.day,
       days: afterTomorrow ? 2 : undefined,
+      points: points.length > 0 ? points : undefined,
+      match: dateMatch(rest, points.length > 0),
     },
   };
 }
@@ -289,33 +294,59 @@ function unclearDelete(): TaskPlan {
 }
 
 function readDelete(
-  record: { scope?: unknown },
+  record: { scope?: unknown; match?: unknown },
   tasks: TaskDraft[],
 ): TaskPlan {
   const draft = tasks[0];
-  const scope = record.scope === "title" || record.scope === "day" || record.scope === "all"
+  const points = pointsOf(tasks);
+  let scope: DeleteScope = record.scope === "title" || record.scope === "day" ||
+      record.scope === "days" || record.scope === "all"
     ? record.scope
     : draft?.title
     ? "title"
     : "unclear";
-  const dated = scope === "day" || (draft != null && draft.when !== "today");
+  if (scope !== "title" && scope !== "all" && points.length > 1) scope = "days";
+  const dated = scope === "day" || scope === "days" || (draft != null && draft.when !== "today");
   return {
     intent: "delete",
     reply: "",
     tasks: [],
     remove: {
       scope,
-      title: draft?.title ?? "",
+      title: scope === "title" ? draft?.title ?? "" : "",
       dated,
-      when: draft?.when ?? "today",
+      when: draft?.when ?? (points.length > 0 ? "month_day" : "today"),
       weekday: draft?.weekday,
       week: draft?.week,
       date: draft?.date,
-      month: draft?.month,
-      day: draft?.day,
+      month: draft?.month ?? points[0]?.month,
+      day: draft?.day ?? points[0]?.day,
       days: draft?.days,
+      points: points.length > 0 ? points : undefined,
+      match: readMatch(record.match),
     },
   };
+}
+
+function readMatch(value: unknown): DateMatch {
+  if (value === "created" || value === "either" || value === "due") return value;
+  return "due";
+}
+
+function pointsOf(tasks: TaskDraft[]): CalendarPoint[] {
+  const points: CalendarPoint[] = [];
+  for (const task of tasks) {
+    if (task.when === "month_day" && task.month && task.day) {
+      points.push({ month: task.month, day: task.day });
+    } else if (task.when === "date" && task.date && isIsoDate(task.date)) {
+      points.push({
+        year: Number(task.date.slice(0, 4)),
+        month: Number(task.date.slice(5, 7)),
+        day: Number(task.date.slice(8, 10)),
+      });
+    }
+  }
+  return dedupePoints(points);
 }
 
 function cleanupDeleteTitle(rest: string): string {
@@ -326,13 +357,145 @@ function cleanupDeleteTitle(rest: string): string {
     " ",
   );
   title = title.replace(wordPattern(weekdayPattern), " ");
-  title = title.replace(wordPattern("на\\s+\\d{1,2}\\s+[а-яё]+"), " ");
+  title = title.replace(wordPattern("на\\s+\\d{1,2}(?:\\s*-?\\s*го)?\\s+[а-яё]+"), " ");
   title = title.replace(wordPattern("сегодня|завтра|послезавтра"), " ");
   title = title.replace(wordPattern("\\d{4}-\\d{2}-\\d{2}"), " ");
+  title = title.replace(
+    wordPattern(
+      "которые|который|которая|которое|были|была|был|было|что|это|именно|только|мне|мной",
+    ),
+    " ",
+  );
+  title = title.replace(
+    wordPattern(`${placedWords}|${createdWords}`),
+    " ",
+  );
   title = title.replace(wordPattern("все|мои|задач[ауи]"), " ");
   const cleaned = cleanTitle(title);
-  if (/^(?:про|на|во|в|к|ко|по|за|от|до|из)$/i.test(cleaned)) return "";
+  if (/^(?:про|на|во|в|к|ко|по|за|от|до|из|и|а)$/i.test(cleaned)) return "";
   return cleaned;
+}
+
+const placedWords = "поставлен\\p{L}*|поставил\\p{L}*|ставил\\p{L}*|запланирован\\p{L}*|назначен\\p{L}*";
+const createdWords = "создан\\p{L}*|создал\\p{L}*|добавлен\\p{L}*|добавил\\p{L}*|записан\\p{L}*|записал\\p{L}*";
+
+function dateMatch(text: string, hasPoints: boolean): DateMatch {
+  const created = hasWord(text, createdWords);
+  const placed = hasWord(text, placedWords);
+  if (!hasPoints && !created && !placed) return "due";
+  if (created && !placed) return "created";
+  if (placed && !hasWord(text, "на")) return "either";
+  return "due";
+}
+
+const monthNames: Record<string, number> = {
+  января: 1,
+  февраля: 2,
+  марта: 3,
+  апреля: 4,
+  мая: 5,
+  июня: 6,
+  июля: 7,
+  августа: 8,
+  сентября: 9,
+  октября: 10,
+  ноября: 11,
+  декабря: 12,
+};
+
+function takeDates(text: string): { points: CalendarPoint[]; rest: string } {
+  const points: CalendarPoint[] = [];
+  const months = Object.keys(monthNames).join("|");
+  const day = "\\d{1,2}(?:\\s*-?\\s*го)?";
+  let source = text;
+
+  source = source.replace(
+    new RegExp(
+      `(?:с\\s+)?(${day})\\s*(?:-|–|—|по)\\s*(${day})\\s+(${months})(?:\\s+(\\d{4}))?(?:\\s+года)?`,
+      "giu",
+    ),
+    (_full, fromRaw: string, toRaw: string, monthName: string, year?: string) => {
+      const month = monthNames[monthName.toLowerCase()];
+      const from = dayNumber(fromRaw);
+      const to = dayNumber(toRaw);
+      const namedYear = year ? Number(year) : undefined;
+      if (month && from && to && from <= to && to - from <= 30) {
+        for (let item = from; item <= to; item++) {
+          points.push(namedYear ? { month, day: item, year: namedYear } : { month, day: item });
+        }
+      }
+      return " ";
+    },
+  );
+
+  source = source.replace(
+    new RegExp(
+      `((?:${day}\\s*(?:,|и)\\s*)+${day})\\s+(${months})(?:\\s+(\\d{4}))?(?:\\s+года)?`,
+      "giu",
+    ),
+    (_full, rawList: string, monthName: string, year?: string) => {
+      const month = monthNames[monthName.toLowerCase()];
+      const namedYear = year ? Number(year) : undefined;
+      if (month) {
+        for (const part of rawList.split(/\s*(?:,|и)\s*/)) {
+          const value = dayNumber(part);
+          if (value) {
+            points.push(namedYear ? { month, day: value, year: namedYear } : { month, day: value });
+          }
+        }
+      }
+      return " ";
+    },
+  );
+
+  source = source.replace(
+    new RegExp(`(${day})\\s+(${months})(?:\\s+(\\d{4}))?(?:\\s+года)?`, "giu"),
+    (_full, rawDay: string, monthName: string, year?: string) => {
+      const month = monthNames[monthName.toLowerCase()];
+      const value = dayNumber(rawDay);
+      if (month && value) {
+        const namedYear = year ? Number(year) : undefined;
+        points.push(namedYear ? { month, day: value, year: namedYear } : { month, day: value });
+      }
+      return " ";
+    },
+  );
+
+  source = source.replace(/\d{4}-\d{2}-\d{2}/g, (value) => {
+    if (!isIsoDate(value)) return value;
+    points.push({
+      year: Number(value.slice(0, 4)),
+      month: Number(value.slice(5, 7)),
+      day: Number(value.slice(8, 10)),
+    });
+    return " ";
+  });
+
+  return {
+    points: dedupePoints(points),
+    rest: source.replace(/\s+/g, " ").trim(),
+  };
+}
+
+function dayNumber(raw: string): number | null {
+  const match = /(\d{1,2})/.exec(raw);
+  if (!match) return null;
+  const value = Number(match[1]);
+  if (value < 1 || value > 31) return null;
+  return value;
+}
+
+function dedupePoints(points: CalendarPoint[]): CalendarPoint[] {
+  const seen = new Set<string>();
+  const result: CalendarPoint[] = [];
+  for (const point of points) {
+    const key = `${point.year ?? ""}-${point.month}-${point.day}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(point);
+    if (result.length >= 31) break;
+  }
+  return result;
 }
 
 function wordsFit(task: string, needle: string): boolean {

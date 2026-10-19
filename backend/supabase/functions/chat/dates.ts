@@ -178,6 +178,107 @@ export function spokenWhen(today: string, dueOn: string): string {
   return longWhen(today, dueOn);
 }
 
+export type CalendarPoint = {
+  month: number;
+  day: number;
+  year?: number;
+};
+
+export type DateMatch = "due" | "created" | "either";
+
+export function closestMonthDay(
+  today: string,
+  month: number,
+  day: number,
+  year?: number,
+): string | null {
+  if (!isIsoDate(today)) return null;
+  if (year) return isoFromParts(year, month, day);
+  const current = Number(today.slice(0, 4));
+  let best: string | null = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const candidate of [current - 1, current, current + 1]) {
+    const iso = isoFromParts(candidate, month, day);
+    if (!iso) continue;
+    const distance = Math.abs(dayDistance(today, iso));
+    const past = iso <= today;
+    const bestPast = best !== null && best <= today;
+    if (distance < bestDistance || (distance === bestDistance && past && !bestPast)) {
+      best = iso;
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
+
+export function resolveCalendarPoints(today: string, points: CalendarPoint[]): string[] {
+  const resolved: string[] = [];
+  const open = new Map<number, CalendarPoint[]>();
+  for (const point of points) {
+    if (point.year) {
+      const iso = isoFromParts(point.year, point.month, point.day);
+      if (iso) resolved.push(iso);
+      continue;
+    }
+    const group = open.get(point.month) ?? [];
+    group.push(point);
+    open.set(point.month, group);
+  }
+  for (const [month, group] of open) {
+    const anchor = closestMonthDay(today, month, group[0].day);
+    if (!anchor) continue;
+    const year = Number(anchor.slice(0, 4));
+    for (const point of group) {
+      const iso = isoFromParts(year, month, point.day);
+      if (iso) resolved.push(iso);
+    }
+  }
+  return [...new Set(resolved)].sort();
+}
+
+export function localIsoDate(iso: string | null | undefined, offsetMinutes: number): string | null {
+  if (!iso) return null;
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms) || offsetMinutes < -840 || offsetMinutes > 840) return null;
+  return new Date(ms + offsetMinutes * 60_000).toISOString().slice(0, 10);
+}
+
+export function fitsDates(
+  dueOn: string,
+  createdAt: string | null | undefined,
+  dates: string[],
+  match: DateMatch,
+  offsetMinutes: number,
+): boolean {
+  const due = dueOn.slice(0, 10);
+  const created = localIsoDate(createdAt, offsetMinutes);
+  if (match === "created") return created !== null && dates.includes(created);
+  if (match === "either") {
+    return dates.includes(due) || (created !== null && dates.includes(created));
+  }
+  return dates.includes(due);
+}
+
+export function spokenDateList(dates: string[], today?: string): string {
+  const unique = [...new Set(dates)].filter(isIsoDate).sort();
+  if (unique.length === 0) return "";
+  const groups = new Map<string, number[]>();
+  for (const iso of unique) {
+    const key = iso.slice(0, 7);
+    const days = groups.get(key) ?? [];
+    days.push(Number(iso.slice(8, 10)));
+    groups.set(key, days);
+  }
+  const parts: string[] = [];
+  for (const [key, days] of groups) {
+    const month = longMonths[Number(key.slice(5, 7))] ?? "";
+    const year = key.slice(0, 4);
+    const tail = today && year !== today.slice(0, 4) ? ` ${year}` : "";
+    parts.push(`${joinWords(days.map(String))} ${month}${tail}`);
+  }
+  return joinWords(parts);
+}
+
 export function confirmationLine(
   title: string,
   today: string,
@@ -203,6 +304,18 @@ function longWhen(today: string, dueOn: string): string {
   const day = Number(dueOn.slice(8, 10));
   const month = longMonths[Number(dueOn.slice(5, 7))] ?? "";
   return `${longWeekdays[isoWeekday(dueOn)]}, ${day} ${month}`;
+}
+
+function dayDistance(from: string, to: string): number {
+  const start = Date.parse(`${from}T00:00:00Z`);
+  const end = Date.parse(`${to}T00:00:00Z`);
+  return Math.round((end - start) / 86_400_000);
+}
+
+function joinWords(words: string[]): string {
+  if (words.length <= 1) return words[0] ?? "";
+  if (words.length === 2) return `${words[0]} и ${words[1]}`;
+  return `${words.slice(0, -1).join(", ")} и ${words[words.length - 1]}`;
 }
 
 function isoFromParts(year: number, month: number, day: number): string | null {

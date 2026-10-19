@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../app/app_theme.dart';
+import '../auth/data/account_tasks.dart';
 import 'data/chat_gateway.dart';
 import 'data/reminder_chime.dart';
 import 'data/reminder_controller.dart';
@@ -12,6 +13,7 @@ import 'data/system_reminder.dart';
 import 'models/chat_item.dart';
 import 'widgets/chat_widgets.dart';
 import 'widgets/reminder_banner.dart';
+import 'widgets/task_actions.dart';
 import 'widgets/task_board_sheet.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -100,7 +102,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       if (mounted && result.kind == ChatKind.listed) {
         final item = _items.last;
         if (item is AiTaskListMessage) {
-          await showTaskBoard(context, tasks: item.tasks);
+          await showTaskBoard(
+            context,
+            tasks: item.tasks,
+            onDelete: _deleteTask,
+          );
         }
       }
     } on ChatException catch (error) {
@@ -209,8 +215,37 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     );
   }
 
+  Future<void> _deleteTask(TaskDraft task) async {
+    if (task.id.isEmpty) return;
+    await const SupabaseAccountTasks().remove(task.id);
+    await forgetReminder(task.id);
+    await _reminders.drop([task.id]);
+    if (!mounted) return;
+    setState(() {
+      for (var index = 0; index < _items.length; index++) {
+        final item = _items[index];
+        if (item is! AiTaskListMessage) continue;
+        final next = [
+          for (final row in item.tasks)
+            if (row.id != task.id) row,
+        ];
+        if (next.length == item.tasks.length) continue;
+        _items[index] = AiTaskListMessage(
+          status: item.status,
+          text: item.text,
+          badge: item.board ? '${next.length}' : item.badge,
+          tasks: next,
+          saveLabel: item.saveLabel,
+          saved: item.saved,
+          board: item.board,
+        );
+      }
+    });
+  }
+
   TaskDraft _draft(StoredTask task) {
     return TaskDraft(
+      id: task.id,
       title: task.title,
       subtitle: task.subtitle,
       icon: task.remind ? Icons.notifications_active_outlined : Icons.task_alt,
@@ -303,7 +338,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                     Padding(
                       padding: const EdgeInsets.fromLTRB(20, 28, 20, 0),
                       child: Text(
-                        'Напиши, например: «запиши задачу сделать уборку». /task покажет список, «удали задачу …» сотрёт её из базы.',
+                        'Напиши, например: «запиши задачу сделать уборку». /task покажет список. «удали задачи 15, 16 и 17 октября» сотрёт их по этим дням. Вручную — кнопка у задачи.',
                         style: AppText.bodyMd(AppColors.outline),
                       ),
                     ),
@@ -311,7 +346,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                     const SizedBox(height: 24),
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 20),
-                      child: ChatItemView(item: item),
+                      child: ChatItemView(item: item, onDeleteTask: _deleteTask),
                     ),
                   ],
                   if (_sending) ...[

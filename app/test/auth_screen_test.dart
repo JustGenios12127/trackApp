@@ -256,6 +256,9 @@ class _FixedTasks implements AccountTasks {
 
   @override
   Future<List<AccountTask>> openList() async => const [];
+
+  @override
+  Future<void> remove(String id) async {}
 }
 
 class _QuietChat implements ChatGateway {

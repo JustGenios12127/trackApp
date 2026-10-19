@@ -3,11 +3,13 @@ import 'package:flutter/material.dart';
 import '../../../app/app_theme.dart';
 import '../data/task_calendar.dart';
 import '../models/chat_item.dart';
+import 'task_actions.dart';
 
 Future<void> showTaskBoard(
   BuildContext context, {
   required List<TaskDraft> tasks,
   DateTime? now,
+  Future<void> Function(TaskDraft task)? onDelete,
 }) {
   return showModalBottomSheet<void>(
     context: context,
@@ -21,7 +23,7 @@ Future<void> showTaskBoard(
         alignment: Alignment.bottomCenter,
         child: ConstrainedBox(
           constraints: BoxConstraints(maxWidth: 480, maxHeight: height * 0.92),
-          child: TaskBoardSheet(tasks: tasks, now: now),
+          child: TaskBoardSheet(tasks: tasks, now: now, onDelete: onDelete),
         ),
       );
     },
@@ -29,10 +31,16 @@ Future<void> showTaskBoard(
 }
 
 class TaskBoardSheet extends StatefulWidget {
-  const TaskBoardSheet({super.key, required this.tasks, this.now});
+  const TaskBoardSheet({
+    super.key,
+    required this.tasks,
+    this.now,
+    this.onDelete,
+  });
 
   final List<TaskDraft> tasks;
   final DateTime? now;
+  final Future<void> Function(TaskDraft task)? onDelete;
 
   @override
   State<TaskBoardSheet> createState() => _TaskBoardSheetState();
@@ -42,20 +50,42 @@ class _TaskBoardSheetState extends State<TaskBoardSheet> {
   late DateTime _selected;
   late DateTime _visibleMonth;
   late final DateTime _today;
+  late List<TaskDraft> _tasks;
+  var _busy = false;
 
   @override
   void initState() {
     super.initState();
     final now = widget.now ?? DateTime.now();
     _today = TaskCalendar.dateOnly(now);
-    _selected = TaskCalendar.initialDay(widget.tasks, now);
+    _tasks = [...widget.tasks];
+    _selected = TaskCalendar.initialDay(_tasks, now);
     _visibleMonth = DateTime(_selected.year, _selected.month);
   }
 
-  Map<DateTime, List<TaskDraft>> get _byDay =>
-      TaskCalendar.groupByDay(widget.tasks);
+  Map<DateTime, List<TaskDraft>> get _byDay => TaskCalendar.groupByDay(_tasks);
 
-  List<TaskDraft> get _undated => TaskCalendar.undated(widget.tasks);
+  List<TaskDraft> get _undated => TaskCalendar.undated(_tasks);
+
+  Future<void> _delete(TaskDraft task) async {
+    final remove = widget.onDelete;
+    if (remove == null || task.id.isEmpty || _busy) return;
+    final ok = await confirmDeleteTask(context, task.title);
+    if (!ok || !mounted) return;
+    setState(() => _busy = true);
+    try {
+      await remove(task);
+      if (!mounted) return;
+      setState(() {
+        _tasks = [for (final item in _tasks) if (item.id != task.id) item];
+        _busy = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      showDeleteError(context);
+    }
+  }
 
   void _shiftMonth(int delta) {
     setState(() {
@@ -107,7 +137,7 @@ class _TaskBoardSheetState extends State<TaskBoardSheet> {
                     borderRadius: BorderRadius.circular(99),
                   ),
                   child: Text(
-                    '${widget.tasks.length}',
+                    '${_tasks.length}',
                     style: AppText.labelSm(
                       AppColors.onSurface,
                       weight: FontWeight.w500,
@@ -156,7 +186,10 @@ class _TaskBoardSheetState extends State<TaskBoardSheet> {
                 else
                   for (var i = 0; i < selectedTasks.length; i++) ...[
                     if (i > 0) const SizedBox(height: 8),
-                    _TaskRow(task: selectedTasks[i]),
+                    _TaskRow(
+                      task: selectedTasks[i],
+                      onDelete: widget.onDelete == null ? null : _delete,
+                    ),
                   ],
                 if (_undated.isNotEmpty) ...[
                   const SizedBox(height: 22),
@@ -164,7 +197,11 @@ class _TaskBoardSheetState extends State<TaskBoardSheet> {
                   const SizedBox(height: 10),
                   for (var i = 0; i < _undated.length; i++) ...[
                     if (i > 0) const SizedBox(height: 8),
-                    _TaskRow(task: _undated[i], showSubtitle: true),
+                    _TaskRow(
+                      task: _undated[i],
+                      showSubtitle: true,
+                      onDelete: widget.onDelete == null ? null : _delete,
+                    ),
                   ],
                 ],
               ],
@@ -362,10 +399,15 @@ class _DayCell extends StatelessWidget {
 }
 
 class _TaskRow extends StatelessWidget {
-  const _TaskRow({required this.task, this.showSubtitle = false});
+  const _TaskRow({
+    required this.task,
+    this.showSubtitle = false,
+    this.onDelete,
+  });
 
   final TaskDraft task;
   final bool showSubtitle;
+  final Future<void> Function(TaskDraft task)? onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -413,6 +455,11 @@ class _TaskRow extends StatelessWidget {
               ],
             ),
           ),
+          if (onDelete != null && task.id.isNotEmpty)
+            TaskDeleteButton(
+              title: task.title,
+              onPressed: () => onDelete!(task),
+            ),
         ],
       ),
     );

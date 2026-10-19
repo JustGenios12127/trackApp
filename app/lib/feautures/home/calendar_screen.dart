@@ -6,6 +6,7 @@ import 'data/task_calendar.dart';
 import 'models/chat_item.dart';
 import 'widgets/chat_widgets.dart';
 import 'widgets/tab_header.dart';
+import 'widgets/task_actions.dart';
 
 class CalendarScreen extends StatefulWidget {
   const CalendarScreen({
@@ -35,6 +36,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
   var _failed = false;
   var _anchored = false;
   var _generation = 0;
+  String? _removing;
 
   @override
   void initState() {
@@ -87,6 +89,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
 
   TaskDraft _draft(AccountTask task) {
     return TaskDraft(
+      id: task.id,
       title: task.title,
       subtitle: TaskCalendar.whenLabel(task.dueOn, task.remindAt, _today),
       icon: task.remindAt != null
@@ -95,6 +98,26 @@ class _CalendarScreenState extends State<CalendarScreen> {
       dueOn: task.dueOn,
       remindAt: task.remindAt,
     );
+  }
+
+  Future<void> _delete(TaskDraft task) async {
+    if (_removing != null || task.id.isEmpty) return;
+    final ok = await confirmDeleteTask(context, task.title);
+    if (!ok || !mounted) return;
+    setState(() => _removing = task.id);
+    try {
+      await _tasks.remove(task.id);
+      await forgetReminder(task.id);
+      if (!mounted) return;
+      setState(() {
+        _items = [for (final item in _items) if (item.id != task.id) item];
+        _removing = null;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _removing = null);
+      showDeleteError(context);
+    }
   }
 
   void _shift(int delta) {
@@ -269,7 +292,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
                         else
                           for (var i = 0; i < selectedTasks.length; i++) ...[
                             if (i > 0) const SizedBox(height: 8),
-                            _TaskRow(task: selectedTasks[i]),
+                            _TaskRow(task: selectedTasks[i], onDelete: _delete),
                           ],
                         if (undated.isNotEmpty) ...[
                           const SizedBox(height: 22),
@@ -280,7 +303,11 @@ class _CalendarScreenState extends State<CalendarScreen> {
                           const SizedBox(height: 10),
                           for (var i = 0; i < undated.length; i++) ...[
                             if (i > 0) const SizedBox(height: 8),
-                            _TaskRow(task: undated[i], showSubtitle: true),
+                            _TaskRow(
+                              task: undated[i],
+                              showSubtitle: true,
+                              onDelete: _delete,
+                            ),
                           ],
                         ],
                       ],
@@ -400,10 +427,15 @@ class _DayCell extends StatelessWidget {
 }
 
 class _TaskRow extends StatelessWidget {
-  const _TaskRow({required this.task, this.showSubtitle = false});
+  const _TaskRow({
+    required this.task,
+    this.showSubtitle = false,
+    this.onDelete,
+  });
 
   final TaskDraft task;
   final bool showSubtitle;
+  final Future<void> Function(TaskDraft task)? onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -451,6 +483,11 @@ class _TaskRow extends StatelessWidget {
               ],
             ),
           ),
+          if (onDelete != null && task.id.isNotEmpty)
+            TaskDeleteButton(
+              title: task.title,
+              onPressed: () => onDelete!(task),
+            ),
         ],
       ),
     );

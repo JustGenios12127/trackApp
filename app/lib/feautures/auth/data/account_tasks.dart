@@ -18,6 +18,8 @@ abstract interface class AccountTasks {
   Future<int> openCount();
 
   Future<List<AccountTask>> openList();
+
+  Future<void> remove(String id);
 }
 
 class SupabaseAccountTasks implements AccountTasks {
@@ -56,6 +58,18 @@ class SupabaseAccountTasks implements AccountTasks {
       );
     }
     return tasks;
+  }
+
+  @override
+  Future<void> remove(String id) async {
+    final removed = await Supabase.instance.client
+        .from('tasks')
+        .delete()
+        .eq('id', id)
+        .select('id');
+    if (removed.isEmpty) {
+      throw StateError('missing');
+    }
   }
 }
 

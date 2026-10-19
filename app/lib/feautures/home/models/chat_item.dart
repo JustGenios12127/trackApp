@@ -51,10 +51,12 @@ class TaskDraft {
     required this.title,
     required this.subtitle,
     required this.icon,
+    this.id = '',
     this.dueOn,
     this.remindAt,
   });
 
+  final String id;
   final String title;
   final String subtitle;
   final IconData icon;

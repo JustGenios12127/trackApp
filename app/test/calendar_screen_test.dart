@@ -1,8 +1,10 @@
 import 'package:app/app/app_theme.dart';
 import 'package:app/feautures/auth/data/account_tasks.dart';
 import 'package:app/feautures/home/calendar_screen.dart';
+import 'package:app/feautures/home/tasks_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   testWidgets('экран календаря показывает задачи выбранного дня', (
@@ -85,6 +87,79 @@ void main() {
     expect(find.text('Не удалось загрузить задачи. Повторить'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('задачу можно удалить кнопкой и отменить удаление', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(390, 900);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final tasks = _MemoryTasks([
+      AccountTask(
+        id: 'wash',
+        title: 'Постирать вещи',
+        dueOn: DateTime(2026, 10, 16),
+      ),
+    ]);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.dark,
+        home: CalendarScreen(now: DateTime(2026, 10, 14), tasks: tasks),
+      ),
+    );
+    await tester.pump();
+
+    await tester.tap(find.byTooltip('Удалить «Постирать вещи»'));
+    await tester.pumpAndSettle();
+    expect(find.text('Удалить задачу?'), findsOneWidget);
+
+    await tester.tap(find.text('Отмена'));
+    await tester.pumpAndSettle();
+    expect(find.text('Постирать вещи'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Удалить «Постирать вещи»'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(TextButton, 'Удалить'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Постирать вещи'), findsNothing);
+    expect(find.text('Пока задач нет'), findsOneWidget);
+    expect(tasks.items, isEmpty);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('в списке задач можно удалить вручную', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(390, 900);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final tasks = _MemoryTasks([
+      const AccountTask(id: 'note', title: 'Без срока'),
+    ]);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.dark,
+        home: TasksScreen(now: DateTime(2026, 10, 14), tasks: tasks),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('Без срока'), findsOneWidget);
+    await tester.tap(find.byTooltip('Удалить «Без срока»'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(TextButton, 'Удалить'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Без срока'), findsNothing);
+    expect(find.text('Пока задач нет'), findsOneWidget);
+    expect(tasks.items, isEmpty);
+    expect(tester.takeException(), isNull);
+  });
 }
 
 class _MemoryTasks implements AccountTasks {
@@ -100,5 +175,12 @@ class _MemoryTasks implements AccountTasks {
   Future<List<AccountTask>> openList() async {
     if (fail) throw Exception('network');
     return items;
+  }
+
+  @override
+  Future<void> remove(String id) async {
+    final before = items.length;
+    items.removeWhere((task) => task.id == id);
+    if (items.length == before) throw StateError('missing');
   }
 }

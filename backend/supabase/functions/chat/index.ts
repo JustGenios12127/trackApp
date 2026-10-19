@@ -1,8 +1,12 @@
 import {
+  closestMonthDay,
   confirmationLine,
+  fitsDates,
   localClock,
   remindInstant,
+  resolveCalendarPoints,
   resolveDueDate,
+  spokenDateList,
   spokenWhen,
   taskSubtitle,
   type DueInput,
@@ -339,33 +343,35 @@ async function deleteResponse(
   const target = plan.remove;
   if (!target || target.scope === "unclear") {
     return {
-      reply: "Напиши, что удалить: «удали задачу сходить в магазин» или «удали все задачи на пятницу».",
+      reply:
+        "Напиши, что удалить: «удали задачу сходить в магазин», «удали все задачи на пятницу» или «удали задачи 15, 16 и 17 октября».",
       tasks: [],
       kind: "chat",
     };
   }
 
   const rows = await rest<TaskRow[]>(
-    `tasks?user_id=eq.${userId}&status=eq.open&select=id,title,due_on,remind_at&order=due_on.asc,created_at.asc&limit=1000`,
+    `tasks?user_id=eq.${userId}&status=eq.open&select=id,title,due_on,remind_at,created_at&order=due_on.asc,created_at.asc&limit=1000`,
     authorization,
   );
-  const dueOn = target.scope === "day" || target.dated
-    ? resolveDueDate(context.today, target)
-    : null;
-  if ((target.scope === "day" || target.dated) && !dueOn) {
+  const dates = plannedDates(context.today, target);
+  if (needsDate(target) && dates.length === 0) {
     return { reply: "Не понял дату. Ничего не удалил.", tasks: [], kind: "chat" };
   }
 
   let chosen = rows;
-  if (dueOn) {
-    chosen = chosen.filter((row) => row.due_on.slice(0, 10) === dueOn);
+  if (dates.length > 0) {
+    const match = target.match ?? "due";
+    chosen = chosen.filter((row) =>
+      fitsDates(row.due_on, row.created_at, dates, match, context.offsetMinutes)
+    );
   }
   if (target.scope === "title") {
     chosen = matchingTitles(chosen, target.title);
   }
 
   if (chosen.length === 0) {
-    return { reply: missingDelete(target, context.today, dueOn), tasks: [], kind: "chat" };
+    return { reply: missingDelete(target, context.today, dates), tasks: [], kind: "chat" };
   }
 
   const ids = chosen.map((row) => row.id).filter((id) => userIdPattern.test(id));
@@ -380,7 +386,7 @@ async function deleteResponse(
   }
 
   return {
-    reply: deletedReply(gone, target, context.today, dueOn),
+    reply: deletedReply(gone, target, context.today, dates),
     tasks: gone.map((row) => toView(row, context)),
     kind: "deleted",
   };
@@ -412,10 +418,30 @@ async function deleteIds(ids: string[], userId: string, authorization: string): 
   return gone;
 }
 
-function missingDelete(target: DeleteTarget, today: string, dueOn: string | null): string {
+function needsDate(target: DeleteTarget): boolean {
+  return target.scope === "day" || target.scope === "days" || target.dated;
+}
+
+function plannedDates(today: string, target: DeleteTarget): string[] {
+  if (!needsDate(target)) return [];
+  if (target.points && target.points.length > 0) {
+    return resolveCalendarPoints(today, target.points);
+  }
+  if (target.when === "month_day" && target.month && target.day) {
+    const iso = closestMonthDay(today, target.month, target.day);
+    return iso ? [iso] : [];
+  }
+  const due = resolveDueDate(today, target);
+  return due ? [due] : [];
+}
+
+function missingDelete(target: DeleteTarget, today: string, dates: string[]): string {
   if (target.scope === "all") return "Открытых задач нет. Удалять нечего.";
-  if (target.scope === "day" && dueOn) {
-    return `На ${spokenWhen(today, dueOn)} задач нет. Ничего не удалил.`;
+  if (target.scope !== "title" && dates.length === 1) {
+    return `На ${spokenWhen(today, dates[0])} задач нет. Ничего не удалил.`;
+  }
+  if (target.scope !== "title" && dates.length > 1) {
+    return `За ${spokenDateList(dates, today)} задач нет. Ничего не удалил.`;
   }
   if (target.title) return `Не нашёл «${target.title}». Ничего не удалил.`;
   return "Не нашёл такие задачи. Ничего не удалил.";
@@ -425,11 +451,14 @@ function deletedReply(
   rows: TaskRow[],
   target: DeleteTarget,
   today: string,
-  dueOn: string | null,
+  dates: string[],
 ): string {
   if (target.scope === "all") return `Удалил все открытые задачи: ${countTasks(rows.length)}.`;
-  if (target.scope === "day" && dueOn) {
-    return `Удалил ${countTasks(rows.length)} на ${spokenWhen(today, dueOn)}.`;
+  if (target.scope !== "title" && dates.length === 1) {
+    return `Удалил ${countTasks(rows.length)} на ${spokenWhen(today, dates[0])}.`;
+  }
+  if (target.scope !== "title" && dates.length > 1) {
+    return `Удалил ${countTasks(rows.length)} за ${spokenDateList(dates, today)}.`;
   }
   if (rows.length === 1) return `Удалил «${rows[0].title}».`;
   const names = rows.slice(0, 5).map((row) => `«${row.title}»`).join(", ");
@@ -446,7 +475,13 @@ function countTasks(count: number): string {
   return `${count} задач`;
 }
 
-type TaskRow = { id: string; title: string; due_on: string; remind_at: string | null };
+type TaskRow = {
+  id: string;
+  title: string;
+  due_on: string;
+  remind_at: string | null;
+  created_at?: string | null;
+};
 
 function toView(
   row: { id: string; title: string; due_on: string; remind_at: string | null },
@@ -499,7 +534,7 @@ function plannerPrompt(today: string): string {
     "Ты разбираешь последнюю фразу пользователя для приложения задач TrackApp.",
     `Сегодня по календарю телефона: ${today}. Не выдумывай другую сегодняшнюю дату.`,
     "Верни только JSON без пояснений:",
-    '{"intent":"create|list|delete|chat","scope":"title|day|all","reply":"","tasks":[{"title":"","when":"today|tomorrow|weekday|date|month_day","weekday":"","week":"upcoming|next","date":"","month":0,"day":0,"remind_time":null}]}',
+    '{"intent":"create|list|delete|chat","scope":"title|day|days|all","match":"due|created|either","reply":"","tasks":[{"title":"","when":"today|tomorrow|weekday|date|month_day","weekday":"","week":"upcoming|next","date":"","month":0,"day":0,"remind_time":null}]}',
     "intent=create, если человек просит записать, поставить, добавить или напомнить задачу.",
     "Если дата не названа, when=today. Не спрашивай дату.",
     "День недели: when=weekday, weekday на английском, week=upcoming. Если сказано «следующий вторник», week=next.",
@@ -509,6 +544,8 @@ function plannerPrompt(today: string): string {
     "intent=delete, если просит удалить, убрать, стереть или отменить задачу.",
     "«удали задачу сходить в магазин» — scope=title, title=действие. Не пиши, что уже удалил.",
     "«удали все задачи на пятницу» — scope=day и дата этого дня. «удали все задачи» — scope=all.",
+    "«удали задачи 15, 16 и 17 октября», «с 15 по 17 октября» и «которые были поставлены 15, 16, 17 октября» — scope=days. В tasks по одной дате when=month_day на каждый день. Это даты, не название.",
+    "Если сказано «созданные» или «добавленные» в эти дни — match=created. Если «поставленные» без предлога «на» — match=either. Иначе match=due.",
     "intent=list, если просит показать задачи.",
     "intent=chat для обычного разговора, reply — короткий ответ по-русски, tasks пустой.",
     "Разбирай только последнее сообщение.",
