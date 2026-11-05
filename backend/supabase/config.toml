@@ -385,3 +385,6 @@ s3_secret_key = "env(S3_SECRET_KEY)"
 
 [functions.chat]
 verify_jwt = true
+
+[functions.cover-letter]
+verify_jwt = true

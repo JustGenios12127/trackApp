@@ -5,9 +5,10 @@ import '../../app/app_theme.dart';
 import '../auth/data/account_tasks.dart';
 import '../auth/data/auth_gateway.dart';
 import '../auth/profile_screen.dart';
-import 'calendar_screen.dart';
 import 'chat_screen.dart';
 import 'data/chat_gateway.dart';
+import 'data/cover_letter_gateway.dart';
+import 'letter_screen.dart';
 import 'tasks_screen.dart';
 import 'widgets/chat_widgets.dart';
 
@@ -18,12 +19,14 @@ class HomeShell extends StatefulWidget {
     required this.auth,
     this.chat,
     this.tasks,
+    this.letters,
   });
 
   final AuthAccount account;
   final AuthGateway auth;
   final ChatGateway? chat;
   final AccountTasks? tasks;
+  final CoverLetterGateway? letters;
 
   @override
   State<HomeShell> createState() => _HomeShellState();
@@ -77,7 +80,7 @@ class _HomeShellState extends State<HomeShell> {
               ),
               _page(
                 2,
-                CalendarScreen(tasks: widget.tasks, visible: _index == 2),
+                LetterScreen(letters: widget.letters, visible: _index == 2),
               ),
               _page(
                 3,

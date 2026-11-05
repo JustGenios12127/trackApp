@@ -16,6 +16,10 @@ const _channelId = 'track_reminders_v2';
 const _legacyChannelId = 'track_reminders';
 final _beat = Int64List.fromList([0, 40, 70, 40, 110, 180]);
 
+bool reminderHandledInsideApp(AppLifecycleState? state) {
+  return state == null || state == AppLifecycleState.resumed;
+}
+
 String? reminderDismissedId(NotificationResponse response) {
   if (response.notificationResponseType ==
       NotificationResponseType.notificationDismissed) {
@@ -50,8 +54,12 @@ class SystemReminder {
   static const _prefsKey = 'scheduled_reminder_ids';
 
   final _plugin = FlutterLocalNotificationsPlugin();
+  final _armed = <String>{};
+  final _posted = <String>{};
   var _ready = false;
   var _zonesReady = false;
+  var _asking = false;
+  var _asked = false;
 
   bool get isReady => _ready;
 
@@ -106,8 +114,6 @@ class SystemReminder {
           audioAttributesUsage: AudioAttributesUsage.notification,
         ),
       );
-      await android?.requestNotificationsPermission();
-      await android?.requestExactAlarmsPermission();
       final launch = await _plugin.getNotificationAppLaunchDetails();
       final response = launch?.notificationResponse;
       if ((launch?.didNotificationLaunchApp ?? false) && response != null) {
@@ -117,6 +123,45 @@ class SystemReminder {
       _ready = true;
     } catch (_) {
       _ready = false;
+    }
+  }
+
+  bool shouldPostOutside(String id) {
+    return id.isNotEmpty && !_armed.contains(id) && !_posted.contains(id);
+  }
+
+  Future<void> requestPermissions() async {
+    if (kIsWeb || !_ready || _asked || _asking) return;
+    _asking = true;
+    final android = _plugin
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >();
+    try {
+      try {
+        await android?.requestNotificationsPermission();
+      } catch (_) {}
+      try {
+        final exact = await android?.canScheduleExactNotifications();
+        if (exact == false) await android?.requestExactAlarmsPermission();
+      } catch (_) {}
+      try {
+        await _plugin
+            .resolvePlatformSpecificImplementation<
+              IOSFlutterLocalNotificationsPlugin
+            >()
+            ?.requestPermissions(alert: true, badge: true, sound: true);
+      } catch (_) {}
+      try {
+        await _plugin
+            .resolvePlatformSpecificImplementation<
+              MacOSFlutterLocalNotificationsPlugin
+            >()
+            ?.requestPermissions(alert: true, badge: true, sound: true);
+      } catch (_) {}
+      _asked = true;
+    } finally {
+      _asking = false;
     }
   }
 
@@ -137,10 +182,13 @@ class SystemReminder {
         notificationDetails: _details(task, copy, audible: audible),
         payload: task.id,
       );
+      _posted.add(task.id);
     } catch (_) {}
   }
 
   Future<void> cancel(String taskId) async {
+    _armed.remove(taskId);
+    _posted.remove(taskId);
     if (!_ready) return;
     try {
       await _plugin.cancel(id: _notificationId(taskId));
@@ -149,59 +197,81 @@ class SystemReminder {
 
   Future<void> schedule(List<StoredTask> tasks) async {
     if (!_ready) return;
+    await _prepareZones();
     final now = DateTime.now().toUtc();
-    final previous = await _storedIds();
+    final modes = await _scheduleModes();
+    final scheduled = <String>[];
+    final upcoming = <String>{};
     final keepShown = <String>{
       for (final task in tasks)
         if (_isPast(task, now)) task.id,
     };
+    for (final task in tasks) {
+      final at = task.remindAt?.toUtc();
+      if (at == null || !at.isAfter(now)) continue;
+      upcoming.add(task.id);
+      if (await _scheduleAt(task, at, modes)) {
+        scheduled.add(task.id);
+        _armed.add(task.id);
+      }
+    }
+
+    final previous = await _storedIds();
+    final retain = {...scheduled, ...keepShown, ...upcoming};
     for (final id in previous) {
-      if (keepShown.contains(id)) continue;
+      if (retain.contains(id)) continue;
+      _armed.remove(id);
       try {
         await _plugin.cancel(id: _notificationId(id));
       } catch (_) {}
     }
-
-    final scheduled = <String>[];
-    for (final task in tasks) {
-      final at = task.remindAt?.toUtc();
-      if (at == null || !at.isAfter(now)) continue;
-      if (await _scheduleAt(task, at)) scheduled.add(task.id);
-    }
     await _storeIds(scheduled);
   }
 
-  Future<bool> _scheduleAt(StoredTask task, DateTime at) async {
+  Future<List<AndroidScheduleMode>> _scheduleModes() async {
+    if (defaultTargetPlatform != TargetPlatform.android) {
+      return const [AndroidScheduleMode.exactAllowWhileIdle];
+    }
+    final android = _plugin
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >();
+    var exact = true;
+    try {
+      exact = await android?.canScheduleExactNotifications() ?? true;
+    } catch (_) {}
+    if (!exact) return const [AndroidScheduleMode.inexactAllowWhileIdle];
+    return const [
+      AndroidScheduleMode.exactAllowWhileIdle,
+      AndroidScheduleMode.alarmClock,
+      AndroidScheduleMode.inexactAllowWhileIdle,
+    ];
+  }
+
+  Future<bool> _scheduleAt(
+    StoredTask task,
+    DateTime at,
+    List<AndroidScheduleMode> modes,
+  ) async {
     final when = tz.TZDateTime.from(at, tz.UTC);
     final id = _notificationId(task.id);
     final copy = _copy(task);
     final details = _details(task, copy, audible: true);
-    try {
-      await _plugin.zonedSchedule(
-        id: id,
-        title: copy.title,
-        body: copy.glance,
-        scheduledDate: when,
-        notificationDetails: details,
-        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-        payload: task.id,
-      );
-      return true;
-    } catch (_) {}
-    try {
-      await _plugin.zonedSchedule(
-        id: id,
-        title: copy.title,
-        body: copy.glance,
-        scheduledDate: when,
-        notificationDetails: details,
-        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-        payload: task.id,
-      );
-      return true;
-    } catch (_) {
-      return false;
+    for (final mode in modes) {
+      try {
+        await _plugin.zonedSchedule(
+          id: id,
+          title: copy.title,
+          body: copy.glance,
+          scheduledDate: when,
+          notificationDetails: details,
+          androidScheduleMode: mode,
+          payload: task.id,
+        );
+        return true;
+      } catch (_) {}
     }
+    return false;
   }
 
   Future<void> _prepareZones() async {
@@ -246,6 +316,7 @@ class SystemReminder {
         largeIcon: const DrawableResourceAndroidBitmap('ic_track_logo'),
         importance: Importance.max,
         priority: Priority.max,
+        onlyAlertOnce: true,
         category: AndroidNotificationCategory.reminder,
         visibility: NotificationVisibility.public,
         playSound: audible,

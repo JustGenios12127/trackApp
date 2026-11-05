@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -52,6 +51,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   late final void Function(String id) _externalDismiss = _reminders.dismiss;
   var _sending = false;
   var _generation = 0;
+  Future<void>? _outside;
 
   @override
   void initState() {
@@ -74,8 +74,12 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      _reminders.reloadDismissed();
+      unawaited(_reminders.reloadDismissed());
+      unawaited(_armReminders());
+      return;
     }
+    if (state == AppLifecycleState.inactive) return;
+    _outside ??= _publishOutside().whenComplete(() => _outside = null);
   }
 
   Future<void> _send() async {
@@ -133,11 +137,26 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
   Future<void> _loadReminders() async {
     try {
+      await SystemReminder.instance.requestPermissions();
       final tasks = await _gateway.reminders(now: DateTime.now());
       if (!mounted) return;
       await _reminders.replace(tasks);
       await SystemReminder.instance.schedule(_reminders.tasks);
     } catch (_) {}
+  }
+
+  Future<void> _armReminders() async {
+    await SystemReminder.instance.requestPermissions();
+    await SystemReminder.instance.schedule(_reminders.tasks);
+  }
+
+  Future<void> _publishOutside() async {
+    final current = _reminders.current;
+    if (current != null &&
+        SystemReminder.instance.shouldPostOutside(current.id)) {
+      await SystemReminder.instance.showNow(current);
+    }
+    await SystemReminder.instance.schedule(_reminders.tasks);
   }
 
   Future<void> _keepReminders(ChatResult result) async {
@@ -159,23 +178,17 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
   Future<void> _deliver(StoredTask task) async {
     final system = SystemReminder.instance.isReady;
-    final phone =
-        defaultTargetPlatform == TargetPlatform.android ||
-        defaultTargetPlatform == TargetPlatform.iOS;
-    final resumed =
-        WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
-    final at = task.remindAt;
-    final late =
-        at != null &&
-        DateTime.now().toUtc().difference(at.toUtc()) >
-            const Duration(seconds: 2);
-    final systemPlays = system && phone && !resumed;
-    if (system && !late && (resumed || !phone)) {
-      await SystemReminder.instance.cancel(task.id);
+    final inside = reminderHandledInsideApp(
+      WidgetsBinding.instance.lifecycleState,
+    );
+    if (!inside) {
+      if (system && SystemReminder.instance.shouldPostOutside(task.id)) {
+        await SystemReminder.instance.showNow(task);
+      }
+      return;
     }
-    if (!systemPlays) await ReminderChime.play();
-    if (system && late) {
-      await SystemReminder.instance.showNow(task, audible: systemPlays);
+    if (!system || SystemReminder.instance.shouldPostOutside(task.id)) {
+      await ReminderChime.play();
     }
   }
 
@@ -310,7 +323,12 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                           padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
                           child: ReminderBanner(
                             task: task,
-                            onDismiss: () => _reminders.dismiss(task.id),
+                            onDismiss: () {
+                              unawaited(
+                                SystemReminder.instance.cancel(task.id),
+                              );
+                              unawaited(_reminders.dismiss(task.id));
+                            },
                           ),
                         ),
                 );
@@ -337,10 +355,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                   if (_items.isEmpty && !_sending)
                     Padding(
                       padding: const EdgeInsets.fromLTRB(20, 28, 20, 0),
-                      child: Text(
-                        'Напиши, например: «запиши задачу сделать уборку». /task покажет список. «удали задачи 15, 16 и 17 октября» сотрёт их по этим дням. Вручную — кнопка у задачи.',
-                        style: AppText.bodyMd(AppColors.outline),
-                      ),
                     ),
                   for (final item in _items) ...[
                     const SizedBox(height: 24),

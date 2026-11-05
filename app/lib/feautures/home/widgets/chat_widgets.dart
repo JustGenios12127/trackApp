@@ -861,8 +861,8 @@ class ChatBottomNav extends StatelessWidget {
                     onTap: () => _handle(1),
                   ),
                   _NavItem(
-                    icon: selected == 2 ? Icons.event : Icons.event_outlined,
-                    label: 'Calendar',
+                    icon: selected == 2 ? Icons.article : Icons.article_outlined,
+                    label: 'Letter',
                     active: selected == 2,
                     onTap: () => _handle(2),
                   ),

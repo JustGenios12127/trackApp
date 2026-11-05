@@ -1,6 +1,7 @@
 import 'package:app/feautures/home/data/chat_gateway.dart';
 import 'package:app/feautures/home/data/reminder_controller.dart';
 import 'package:app/feautures/home/data/system_reminder.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -8,6 +9,15 @@ import 'package:shared_preferences/shared_preferences.dart';
 void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
+  });
+
+  test('системное уведомление нужно, когда приложения не видно', () {
+    expect(reminderHandledInsideApp(null), isTrue);
+    expect(reminderHandledInsideApp(AppLifecycleState.resumed), isTrue);
+    expect(reminderHandledInsideApp(AppLifecycleState.inactive), isFalse);
+    expect(reminderHandledInsideApp(AppLifecycleState.hidden), isFalse);
+    expect(reminderHandledInsideApp(AppLifecycleState.paused), isFalse);
+    expect(reminderHandledInsideApp(AppLifecycleState.detached), isFalse);
   });
 
   test('кнопка «Понятно» в уведомлении запоминает закрытие', () async {

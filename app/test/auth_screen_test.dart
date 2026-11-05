@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:app/app/app_theme.dart';
 import 'package:app/app/auth_gate.dart';
@@ -7,6 +8,7 @@ import 'package:app/feautures/auth/data/account_tasks.dart';
 import 'package:app/feautures/auth/data/auth_gateway.dart';
 import 'package:app/feautures/auth/profile_screen.dart';
 import 'package:app/feautures/home/data/chat_gateway.dart';
+import 'package:app/feautures/home/data/cover_letter_gateway.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -110,6 +112,7 @@ void main() {
         auth: auth,
         chat: const _QuietChat(),
         tasks: const _FixedTasks(2),
+        letters: const _QuietLetters(),
       ),
     );
     await tester.pump();
@@ -127,16 +130,16 @@ void main() {
     expect(find.text('Профиль'), findsOneWidget);
     expect(find.text('AI Hub'), findsOneWidget);
     expect(find.text('Tasks'), findsOneWidget);
-    expect(find.text('Calendar'), findsOneWidget);
+    expect(find.text('Letter'), findsOneWidget);
 
     await tester.tap(find.text('Tasks'));
     await tester.pump();
     expect(find.text('Задачи'), findsOneWidget);
     expect(find.text('Profile'), findsOneWidget);
 
-    await tester.tap(find.text('Calendar'));
+    await tester.tap(find.text('Letter'));
     await tester.pump();
-    expect(find.text('Календарь'), findsOneWidget);
+    expect(find.text('Письмо'), findsOneWidget);
     expect(find.text('AI Hub'), findsOneWidget);
 
     await tester.tap(find.text('AI Hub'));
@@ -259,6 +262,29 @@ class _FixedTasks implements AccountTasks {
 
   @override
   Future<void> remove(String id) async {}
+}
+
+class _QuietLetters implements CoverLetterGateway {
+  const _QuietLetters();
+
+  @override
+  Future<List<SavedResume>> list() async => const [];
+
+  @override
+  Future<SavedResume> save({
+    required String fileName,
+    required Uint8List bytes,
+  }) async {
+    throw const CoverLetterException('quiet');
+  }
+
+  @override
+  Future<void> remove(String id) async {}
+
+  @override
+  Future<CoverLetter> write({required String vacancy}) async {
+    throw const CoverLetterException('quiet');
+  }
 }
 
 class _QuietChat implements ChatGateway {

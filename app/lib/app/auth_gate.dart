@@ -6,15 +6,17 @@ import '../feautures/auth/auth_screen.dart';
 import '../feautures/auth/data/account_tasks.dart';
 import '../feautures/auth/data/auth_gateway.dart';
 import '../feautures/home/data/chat_gateway.dart';
+import '../feautures/home/data/cover_letter_gateway.dart';
 import '../feautures/home/home_shell.dart';
 import 'app_theme.dart';
 
 class AuthGate extends StatefulWidget {
-  const AuthGate({super.key, this.auth, this.chat, this.tasks});
+  const AuthGate({super.key, this.auth, this.chat, this.tasks, this.letters});
 
   final AuthGateway? auth;
   final ChatGateway? chat;
   final AccountTasks? tasks;
+  final CoverLetterGateway? letters;
 
   @override
   State<AuthGate> createState() => _AuthGateState();
@@ -66,6 +68,7 @@ class _AuthGateState extends State<AuthGate> {
       auth: _auth,
       chat: widget.chat,
       tasks: widget.tasks,
+      letters: widget.letters,
     );
   }
 }
@@ -77,12 +80,14 @@ class _SignedInShell extends StatelessWidget {
     required this.auth,
     this.chat,
     this.tasks,
+    this.letters,
   });
 
   final AuthAccount account;
   final AuthGateway auth;
   final ChatGateway? chat;
   final AccountTasks? tasks;
+  final CoverLetterGateway? letters;
 
   @override
   Widget build(BuildContext context) {
@@ -92,6 +97,7 @@ class _SignedInShell extends StatelessWidget {
       auth: auth,
       chat: chat,
       tasks: tasks,
+      letters: letters,
     );
   }
 }
